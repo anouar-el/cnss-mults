@@ -62,6 +62,8 @@ import { executerTestsPrompt10, BilanPrompt10 } from './tests/testPrompt10';
 import { executerTestsPrompt11, BilanPrompt11 } from './tests/testPrompt11';
 import { BackupRestoreView } from './components/BackupRestoreView';
 import { DonneesModificationAnomalie } from './components/ModifierAnomalieModal';
+import { MigrationSupabaseModal } from './components/MigrationSupabaseModal';
+import { isSupabaseConfigured, checkSupabaseConnection } from './services/supabaseClient';
 import { cnssPreetabliService } from './services/cnssPreetabliService';
 import {
   FichierPreetabliCnss,
@@ -139,6 +141,14 @@ export default function App() {
   const [isImportPaieOpen, setIsImportPaieOpen] = useState(false);
   const [isImportBaseCnssOpen, setIsImportBaseCnssOpen] = useState(false);
   const [isImportPreetabliOpen, setIsImportPreetabliOpen] = useState(false);
+  const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
+  const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => isSupabaseConfigured());
+
+  useEffect(() => {
+    checkSupabaseConnection().then(connecte => {
+      setIsSupabaseConnected(connecte || isSupabaseConfigured());
+    });
+  }, []);
 
   // Bannière de résumé après import (Section 20)
   const [resumeImport, setResumeImport] = useState<{
@@ -1027,6 +1037,28 @@ export default function App() {
 
           {/* SÉLECTEUR DE MOIS & ACTIONS PRINCIPALES */}
           <div className="flex items-center flex-wrap gap-2">
+            {/* Indicateur Base de données : Supabase (PROMPT 14) */}
+            <button
+              onClick={() => setIsMigrationModalOpen(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
+              title="Ouvrir l'interface de migration et synchronisation Supabase"
+            >
+              <Database className="w-3.5 h-3.5 text-slate-600 shrink-0" />
+              <span className="text-[11px] text-slate-700 font-medium hidden sm:inline">Base de données : Supabase</span>
+              <span className="text-[11px] text-slate-700 font-medium sm:hidden">Supabase</span>
+              {isSupabaseConnected ? (
+                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-black">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+                  🟢 Connectée
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 text-[11px] text-rose-700 font-black">
+                  <span className="w-2 h-2 rounded-full bg-rose-500"></span>
+                  🔴 Déconnectée
+                </span>
+              )}
+            </button>
+
             <div className="flex items-center gap-1.5 bg-slate-100 border border-slate-300 rounded-xl px-2.5 py-1 text-xs">
               <Calendar className="w-3.5 h-3.5 text-slate-500 shrink-0" />
               <select
@@ -2823,9 +2855,16 @@ export default function App() {
         onFichierImporte={handleFichierPreetabliImporte}
       />
 
+      {/* MODALE DE MIGRATION & SYNCHRONISATION SUPABASE (PROMPT 14) */}
+      <MigrationSupabaseModal
+        isOpen={isMigrationModalOpen}
+        onClose={() => setIsMigrationModalOpen(false)}
+        onNotification={afficherNotification}
+      />
+
       {/* FOOTER */}
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500">
-        CNSS MULT.S &bull; PROMPT 11 &bull; Backup, Restauration & Reprise Après Sinistre &bull; 271/271 Tests Réussis (100% Validé)
+        CNSS MULT.S &bull; PROMPT 14 &bull; Architecture & Migration Supabase PostgreSQL &bull; 271/271 Tests Réussis (100% Validé)
       </footer>
     </div>
   );

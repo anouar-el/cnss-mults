@@ -48,8 +48,12 @@ export interface MigrationExecutionResult {
     aliases: number;
     periodes: number;
     lignesPaie: number;
+    rapprochements?: number;
     registres: number;
+    bordereaux?: number;
+    paiements?: number;
     dossiers: number;
+    preetablis?: number;
     audits: number;
     total: number;
   };
@@ -106,7 +110,40 @@ export const migrationVerificationService = {
       estConforme: localPeriodes.length === supaPeriodes.length,
     });
 
-    // 5. Registres Consolidation
+    // 5. Lignes de Paie
+    let totalLignesPaieLocal = 0;
+    let totalLignesPaieSupa = 0;
+    for (const p of localPeriodes) {
+      const pId = p.idMois || p.id || '2026-09';
+      const pLinesLoc = persistenceService.getLignesPaiePeriode(pId);
+      totalLignesPaieLocal += pLinesLoc ? pLinesLoc.length : 0;
+      totalLignesPaieSupa += (await supabasePersistenceService.getLignesPaiePeriode(pId)).length;
+    }
+    entites.push({
+      nom: 'Lignes de Paie Importées',
+      countLocal: totalLignesPaieLocal,
+      countSupabase: totalLignesPaieSupa,
+      estConforme: totalLignesPaieLocal === totalLignesPaieSupa,
+    });
+
+    // 6. Rapprochements
+    let totalRapsLocal = 0;
+    let totalRapsSupa = 0;
+    for (const p of localPeriodes) {
+      const pId = p.idMois || p.id || '2026-09';
+      const rLoc = persistenceService.getRapprochementsPeriode(pId);
+      if (rLoc) totalRapsLocal += rLoc.length;
+      const rSup = await supabasePersistenceService.getRapprochementsPeriode(pId);
+      if (rSup) totalRapsSupa += rSup.length;
+    }
+    entites.push({
+      nom: 'Rapprochements Traités',
+      countLocal: totalRapsLocal,
+      countSupabase: totalRapsSupa,
+      estConforme: totalRapsLocal === totalRapsSupa,
+    });
+
+    // 7. Registres Consolidation
     let totalLignesRegistreLocal = 0;
     let totalLignesRegistreSupa = 0;
     for (const p of localPeriodes) {
@@ -122,7 +159,37 @@ export const migrationVerificationService = {
       estConforme: totalLignesRegistreLocal === totalLignesRegistreSupa,
     });
 
-    // 6. Dossiers Mensuels Scellés
+    // 8. Bordereaux CNSS F.212-2-58
+    let countBordereauxLocal = 0;
+    let countBordereauxSupa = 0;
+    for (const p of localPeriodes) {
+      const pId = p.idMois || p.id || '2026-09';
+      if (persistenceService.getBordereauPeriode(pId)) countBordereauxLocal++;
+      if (await supabasePersistenceService.getBordereauPeriode(pId)) countBordereauxSupa++;
+    }
+    entites.push({
+      nom: 'Bordereaux Déclaration (F.212-2-58)',
+      countLocal: countBordereauxLocal,
+      countSupabase: countBordereauxSupa,
+      estConforme: countBordereauxLocal === countBordereauxSupa,
+    });
+
+    // 9. Bordereaux Paiement 511-1-01
+    let countPaiementsLocal = 0;
+    let countPaiementsSupa = 0;
+    for (const p of localPeriodes) {
+      const pId = p.idMois || p.id || '2026-09';
+      if (persistenceService.getPaiementPeriode(pId)) countPaiementsLocal++;
+      if (await supabasePersistenceService.getPaiementPeriode(pId)) countPaiementsSupa++;
+    }
+    entites.push({
+      nom: 'Bordereaux Paiement (511-1-01)',
+      countLocal: countPaiementsLocal,
+      countSupabase: countPaiementsSupa,
+      estConforme: countPaiementsLocal === countPaiementsSupa,
+    });
+
+    // 10. Dossiers Mensuels Scellés
     let countDossiersLocal = 0;
     let countDossiersSupa = 0;
     for (const p of localPeriodes) {
@@ -138,7 +205,7 @@ export const migrationVerificationService = {
       estConforme: countDossiersLocal === countDossiersSupa,
     });
 
-    // 7. Journal d'Audit
+    // 11. Journal d'Audit
     const localAudits = persistenceService.getJournalAudit();
     const supaAudits = await supabasePersistenceService.getJournalAudit();
     entites.push({
@@ -146,6 +213,21 @@ export const migrationVerificationService = {
       countLocal: localAudits.length,
       countSupabase: supaAudits.length,
       estConforme: localAudits.length === supaAudits.length,
+    });
+
+    // 12. Préétablis BDS
+    let countPreetablisLocal = 0;
+    let countPreetablisSupa = 0;
+    for (const p of localPeriodes) {
+      const pId = p.idMois || p.id || '2026-09';
+      if (persistenceService.getFichierPreetabli(pId)) countPreetablisLocal++;
+      if (await supabasePersistenceService.getFichierPreetabli(pId)) countPreetablisSupa++;
+    }
+    entites.push({
+      nom: 'Fichiers Préétablis CNSS (BDS)',
+      countLocal: countPreetablisLocal,
+      countSupabase: countPreetablisSupa,
+      estConforme: countPreetablisLocal === countPreetablisSupa,
     });
 
     // Calcul global
@@ -255,8 +337,12 @@ export const migrationVerificationService = {
 
     // 4. Périodes & Lignes associées
     let totalLignesPaie = 0;
+    let totalRaps = 0;
     let totalRegistres = 0;
+    let totalBordereaux = 0;
+    let totalPaiements = 0;
     let totalDossiers = 0;
+    let totalPreetablis = 0;
 
     await supabasePersistenceService.savePeriodes(localPeriodes);
 
@@ -270,6 +356,13 @@ export const migrationVerificationService = {
         totalLignesPaie += paieLines.length;
       }
 
+      // Rapprochements traités
+      const raps = persistenceService.getRapprochementsPeriode(pId);
+      if (raps && raps.length > 0) {
+        await supabasePersistenceService.saveRapprochementsPeriode(pId, raps);
+        totalRaps += raps.length;
+      }
+
       // Registre consolidé
       const regLines = persistenceService.getRegistrePeriode(pId);
       if (regLines && regLines.length > 0) {
@@ -277,11 +370,38 @@ export const migrationVerificationService = {
         totalRegistres += regLines.length;
       }
 
+      // Bordereau de déclaration F.212-2-58
+      const bordereau = persistenceService.getBordereauPeriode(pId);
+      if (bordereau) {
+        await supabasePersistenceService.saveBordereauPeriode(pId, bordereau);
+        totalBordereaux++;
+      }
+
+      // Bordereau de paiement 511-1-01
+      const paiement = persistenceService.getPaiementPeriode(pId);
+      if (paiement) {
+        await supabasePersistenceService.savePaiementPeriode(pId, paiement);
+        totalPaiements++;
+      }
+
       // Dossier mensuel scellé
       const dossier = persistenceService.getDossierPeriode(pId);
       if (dossier) {
         await supabasePersistenceService.saveDossierPeriode(pId, dossier);
         totalDossiers++;
+      }
+
+      // Fichier préétabli BDS
+      const preetabli = persistenceService.getFichierPreetabli(pId);
+      if (preetabli) {
+        await supabasePersistenceService.saveFichierPreetabli(pId, preetabli);
+        totalPreetablis++;
+      }
+
+      // Anomalies résolues manuellement
+      const anomaliesResolues = persistenceService.getAnomaliesResoluesManuellement(pId);
+      if (anomaliesResolues && Object.keys(anomaliesResolues).length > 0) {
+        supabasePersistenceService.saveAnomaliesResoluesManuellement(pId, anomaliesResolues);
       }
     }
 
@@ -310,8 +430,12 @@ export const migrationVerificationService = {
       aliases: localAliases.length,
       periodes: localPeriodes.length,
       lignesPaie: totalLignesPaie,
+      rapprochements: totalRaps,
       registres: totalRegistres,
+      bordereaux: totalBordereaux,
+      paiements: totalPaiements,
       dossiers: totalDossiers,
+      preetablis: totalPreetablis,
       audits: localAudits.length,
       total:
         (localConfig ? 1 : 0) +
@@ -319,8 +443,12 @@ export const migrationVerificationService = {
         localAliases.length +
         localPeriodes.length +
         totalLignesPaie +
+        totalRaps +
         totalRegistres +
+        totalBordereaux +
+        totalPaiements +
         totalDossiers +
+        totalPreetablis +
         localAudits.length,
     };
 

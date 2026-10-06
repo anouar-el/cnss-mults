@@ -15,9 +15,12 @@ import {
   LigneRegistreCnss,
   LignePaieImportee,
   EvenementAudit,
+  ResultatRapprochement,
 } from '../types/cnss';
-import { EntrepriseCnssConfig } from '../types/cnssBordereau';
+import { EntrepriseCnssConfig, DocumentBordereauCnss } from '../types/cnssBordereau';
+import { DocumentBordereauPaiementCnss } from '../types/cnssPaiement';
 import { DossierCnssMensuel } from '../types/cnssDossier';
+import { FichierPreetabliCnss } from '../types/cnssPreetabli';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 export interface SupabaseEntitiesStats {
@@ -26,9 +29,13 @@ export interface SupabaseEntitiesStats {
   aliases: number;
   periodes: number;
   lignesPaie: number;
+  rapprochements: number;
   registres: number;
+  bordereaux: number;
+  paiements: number;
   dossiers: number;
   audits: number;
+  preetablis: number;
   totalElements: number;
 }
 
@@ -47,9 +54,14 @@ class SupabasePersistenceService {
     employee_aliases: new Map<string, AliasItem>(),
     periods: new Map<string, PeriodeMensuelle>(),
     payroll_lines: new Map<string, LignePaieImportee[]>(),
+    reconciliations: new Map<string, ResultatRapprochement[]>(),
     cnss_register_lines: new Map<string, LigneRegistreCnss[]>(),
+    bordereaux: new Map<string, DocumentBordereauCnss>(),
+    payments: new Map<string, DocumentBordereauPaiementCnss>(),
     monthly_dossiers: new Map<string, DossierCnssMensuel>(),
     audit_logs: new Map<string, EvenementAudit>(),
+    preetablis: new Map<string, FichierPreetabliCnss>(),
+    anomalies_resolues: new Map<string, Record<string, { justification: string; date: string }>>(),
   };
 
   public getCompanyAffiliation(): string {
@@ -416,6 +428,67 @@ class SupabasePersistenceService {
   }
 
   // =========================================================================
+  // 5b. RAPPROCHEMENTS (reconciliations)
+  // =========================================================================
+  async getRapprochementsPeriode(monthId: string): Promise<ResultatRapprochement[] | null> {
+    return this.tables.reconciliations.get(monthId) || null;
+  }
+
+  async saveRapprochementsPeriode(monthId: string, lines: ResultatRapprochement[]): Promise<void> {
+    this.tables.reconciliations.set(monthId, JSON.parse(JSON.stringify(lines)));
+  }
+
+  // =========================================================================
+  // 6b. BORDEREAUX CNSS (declarations)
+  // =========================================================================
+  async getBordereauPeriode(monthId: string): Promise<DocumentBordereauCnss | null> {
+    return this.tables.bordereaux.get(monthId) || null;
+  }
+
+  async saveBordereauPeriode(monthId: string, doc: DocumentBordereauCnss): Promise<void> {
+    this.tables.bordereaux.set(monthId, JSON.parse(JSON.stringify(doc)));
+  }
+
+  // =========================================================================
+  // 6c. PAIEMENTS COTISATIONS (payments)
+  // =========================================================================
+  async getPaiementPeriode(monthId: string): Promise<DocumentBordereauPaiementCnss | null> {
+    return this.tables.payments.get(monthId) || null;
+  }
+
+  async savePaiementPeriode(monthId: string, doc: DocumentBordereauPaiementCnss): Promise<void> {
+    this.tables.payments.set(monthId, JSON.parse(JSON.stringify(doc)));
+  }
+
+  // =========================================================================
+  // 7b. PRÉÉTABLIS BDS (preetablis)
+  // =========================================================================
+  async getFichierPreetabli(monthId: string): Promise<FichierPreetabliCnss | null> {
+    return this.tables.preetablis.get(monthId) || null;
+  }
+
+  async saveFichierPreetabli(monthId: string, doc: FichierPreetabliCnss): Promise<void> {
+    this.tables.preetablis.set(monthId, JSON.parse(JSON.stringify(doc)));
+  }
+
+  // =========================================================================
+  // 7c. ANOMALIES RÉSOLUES MANUELLEMENT
+  // =========================================================================
+  getAnomaliesResoluesManuellement(monthId: string): Record<string, { justification: string; date: string }> {
+    return this.tables.anomalies_resolues.get(monthId) || {};
+  }
+
+  saveAnomalieResolueManuellement(monthId: string, anomalieId: string, justification: string): void {
+    const existant = this.tables.anomalies_resolues.get(monthId) || {};
+    existant[anomalieId] = { justification, date: new Date().toISOString() };
+    this.tables.anomalies_resolues.set(monthId, existant);
+  }
+
+  saveAnomaliesResoluesManuellement(monthId: string, map: Record<string, { justification: string; date: string }>): void {
+    this.tables.anomalies_resolues.set(monthId, { ...map });
+  }
+
+  // =========================================================================
   // 9. STATISTIQUES GLOBALES SUPABASE
   // =========================================================================
   async getStats(): Promise<SupabaseEntitiesStats> {
@@ -427,11 +500,17 @@ class SupabasePersistenceService {
     let totalLignesPaie = 0;
     this.tables.payroll_lines.forEach(list => (totalLignesPaie += list.length));
 
+    let totalRapprochements = 0;
+    this.tables.reconciliations.forEach(list => (totalRapprochements += list.length));
+
     let registres = 0;
     this.tables.cnss_register_lines.forEach(list => (registres += list.length));
 
+    const bordereaux = this.tables.bordereaux.size;
+    const paiements = this.tables.payments.size;
     const dossiers = this.tables.monthly_dossiers.size;
     const audits = this.tables.audit_logs.size;
+    const preetablis = this.tables.preetablis.size;
 
     return {
       companies,
@@ -439,11 +518,26 @@ class SupabasePersistenceService {
       aliases,
       periodes,
       lignesPaie: totalLignesPaie,
+      rapprochements: totalRapprochements,
       registres,
+      bordereaux,
+      paiements,
       dossiers,
       audits,
+      preetablis,
       totalElements:
-        companies + salaries + aliases + periodes + totalLignesPaie + registres + dossiers + audits,
+        companies +
+        salaries +
+        aliases +
+        periodes +
+        totalLignesPaie +
+        totalRapprochements +
+        registres +
+        bordereaux +
+        paiements +
+        dossiers +
+        audits +
+        preetablis,
     };
   }
 
@@ -456,9 +550,14 @@ class SupabasePersistenceService {
     this.tables.employee_aliases.clear();
     this.tables.periods.clear();
     this.tables.payroll_lines.clear();
+    this.tables.reconciliations.clear();
     this.tables.cnss_register_lines.clear();
+    this.tables.bordereaux.clear();
+    this.tables.payments.clear();
     this.tables.monthly_dossiers.clear();
     this.tables.audit_logs.clear();
+    this.tables.preetablis.clear();
+    this.tables.anomalies_resolues.clear();
   }
 }
 
