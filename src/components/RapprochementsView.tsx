@@ -32,6 +32,7 @@ import { determinerStatutLigneP5 } from '../services/matchingEngine';
 import { ComparaisonFaceAFaceModal } from './ComparaisonFaceAFaceModal';
 import { ValidationGlobaleModal } from './ValidationGlobaleModal';
 import { ModifierAnomalieModal, DonneesModificationAnomalie } from './ModifierAnomalieModal';
+import { masquerCni, masquerCnss } from '../utils/maskSensitive';
 
 interface RapprochementsViewProps {
   rapprochements: ResultatRapprochement[];
@@ -507,14 +508,14 @@ export const RapprochementsView: React.FC<RapprochementsViewProps> = ({
                         )}
                       </td>
 
-                      {/* CNI */}
+                      {/* CNI (Masquée selon RGPD / CNDP) */}
                       <td className="py-3 px-3 font-mono text-[11px] text-slate-600">
-                        {rap.cniDeclareeFinale || salarie?.cni || '-'}
+                        {masquerCni(rap.cniDeclareeFinale || salarie?.cni)}
                       </td>
 
-                      {/* N° CNSS */}
+                      {/* N° CNSS (Masqué selon RGPD / CNDP) */}
                       <td className="py-3 px-3 font-mono text-[11px] font-bold text-slate-800">
-                        {rap.cnssDeclareeFinale || salarie?.immatriculationCnss || '-'}
+                        {masquerCnss(rap.cnssDeclareeFinale || salarie?.immatriculationCnss)}
                       </td>
 
                       {/* Score */}

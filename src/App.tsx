@@ -1014,47 +1014,40 @@ export default function App() {
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-lg font-bold text-slate-900 tracking-tight">CNSS MULT.S</h1>
-                <span className="text-[11px] px-2.5 py-0.5 rounded-full font-black bg-emerald-100 text-emerald-900 border border-emerald-300">
-                  PROMPT 10 &bull; AUDIT RÉEL MULT.S &bull; END-TO-END & DURCISSEMENT PRODUCTION
-                </span>
+                <span className="text-xs text-slate-500 font-medium hidden sm:inline">SARLAU MULT.S &bull; N° 6541835</span>
                 {statutPeriode === 'CLOTURE' ? (
-                  <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                  <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-amber-100 text-amber-900 border border-amber-300">
                     <Lock className="w-3 h-3 text-amber-700" />
                     CLÔTURÉ
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-full font-bold bg-blue-100 text-blue-900 border border-blue-300">
+                  <span className="inline-flex items-center gap-1 text-[11px] px-2.5 py-0.5 rounded-full font-bold bg-blue-100 text-blue-900 border border-blue-300">
                     <Unlock className="w-3 h-3 text-blue-700" />
                     EN COURS
                   </span>
                 )}
               </div>
-              <p className="text-xs text-slate-500">
-                Hiérarchie stricte CNI &rarr; CNSS &rarr; Alias &rarr; Nom &rarr; Token-Sort &rarr; Fuzzy &bull; Arbitrage Face à Face
-              </p>
             </div>
           </div>
 
           {/* SÉLECTEUR DE MOIS & ACTIONS PRINCIPALES */}
           <div className="flex items-center flex-wrap gap-2">
-            {/* Indicateur Base de données : Supabase (PROMPT 14) */}
+            {/* Statut de la base (Section 6) */}
             <button
               onClick={() => setIsMigrationModalOpen(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
-              title="Ouvrir l'interface de migration et synchronisation Supabase"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold bg-slate-50 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer shadow-2xs"
+              title="Gérer la base de données et la synchronisation Supabase"
             >
               <Database className="w-3.5 h-3.5 text-slate-600 shrink-0" />
-              <span className="text-[11px] text-slate-700 font-medium hidden sm:inline">Base de données : Supabase</span>
-              <span className="text-[11px] text-slate-700 font-medium sm:hidden">Supabase</span>
               {isSupabaseConnected ? (
-                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-700 font-black">
+                <span className="inline-flex items-center gap-1.5 text-xs text-emerald-800 font-bold">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  🟢 Connectée
+                  🟢 Supabase connecté
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1 text-[11px] text-rose-700 font-black">
+                <span className="inline-flex items-center gap-1.5 text-xs text-rose-800 font-bold">
                   <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                  🔴 Déconnectée
+                  🔴 Supabase déconnecté
                 </span>
               )}
             </button>
