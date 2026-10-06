@@ -77,6 +77,7 @@ import {
 import { rapprocherLigne, executerRapprochement } from './services/matchingEngine';
 import { validationEngine } from './services/validationEngine';
 import { persistenceService } from './services/persistenceService';
+import { supabasePersistenceService } from './services/supabasePersistenceService';
 import { cnssRegisterService } from './services/cnssRegisterService';
 import {
   SalarieReferentiel,
@@ -90,6 +91,7 @@ import {
   PeriodeMensuelle,
   AnalyseFichierExcel,
   LigneRegistreCnss,
+  EvenementAudit,
 } from './types/cnss';
 
 type VueType =
@@ -275,13 +277,28 @@ export default function App() {
     let rapsMois: ResultatRapprochement[] = [];
     if (lignesMois) {
       setLignesPaie(lignesMois);
-      rapsMois = executerRapprochement(lignesMois, baseSalaries);
+      // Vérifier d'abord les rapprochements sauvegardés (Supabase / cache)
+      const rapsSauves = persistenceService.getRapprochementsPeriode(nouveauMois);
+      if (rapsSauves && rapsSauves.length > 0) {
+        rapsMois = rapsSauves;
+      } else {
+        rapsMois = executerRapprochement(lignesMois, baseSalaries);
+        persistenceService.saveRapprochementsPeriode(nouveauMois, rapsMois);
+        supabasePersistenceService.saveRapprochementsPeriode(nouveauMois, rapsMois).catch(() => {});
+      }
       setRapprochements(rapsMois);
     } else if (nouveauMois === '2026-09') {
       const init = chargerLignesPaieReelles();
       persistenceService.saveLignesPaiePeriode('2026-09', init);
       setLignesPaie(init);
-      rapsMois = executerRapprochement(init, baseSalaries);
+      const rapsSauves = persistenceService.getRapprochementsPeriode('2026-09');
+      if (rapsSauves && rapsSauves.length > 0) {
+        rapsMois = rapsSauves;
+      } else {
+        rapsMois = executerRapprochement(init, baseSalaries);
+        persistenceService.saveRapprochementsPeriode('2026-09', rapsMois);
+        supabasePersistenceService.saveRapprochementsPeriode('2026-09', rapsMois).catch(() => {});
+      }
       setRapprochements(rapsMois);
     } else {
       // Nouvelle période sans lignes de paie copiées (Section 17)
@@ -318,22 +335,76 @@ export default function App() {
     setAnomaliesResoluesManuellement(persistenceService.getAnomaliesResoluesManuellement(nouveauMois));
   }, [baseSalaries]);
 
-  // Recalcul des rapprochements après mise à jour de la base ou des alias
+  // Recalcul des rapprochements après mise à jour de la base ou des alias (sans écraser les validations)
   const recalculerRapprochements = useCallback(() => {
     const listAliases = persistenceService.getAliases();
     setAliases(listAliases);
 
     if (lignesPaie.length > 0) {
-      const raps = executerRapprochement(lignesPaie, baseSalaries);
-      setRapprochements(raps);
+      setRapprochements(prev => {
+        const recalcules = executerRapprochement(lignesPaie, baseSalaries);
+        if (!prev || prev.length === 0) {
+          const cache = persistenceService.getRapprochementsPeriode(moisActif);
+          if (cache && cache.length > 0) return cache;
+          return recalcules;
+        }
+
+        // Fusion stricte : préserver à 100% les salariés validés par l'utilisateur
+        const fusionnes = recalcules.map(nouveauRap => {
+          const existant = prev.find(p => p.id === nouveauRap.id || p.lignePaieId === nouveauRap.lignePaieId);
+          if (existant && (existant.validation === 'VALIDE' || existant.valideParHumain)) {
+            return existant;
+          }
+          return nouveauRap;
+        });
+
+        persistenceService.saveRapprochementsPeriode(moisActif, fusionnes);
+        supabasePersistenceService.saveRapprochementsPeriode(moisActif, fusionnes).catch(() => {});
+        return fusionnes;
+      });
     } else {
       setRapprochements([]);
     }
-  }, [lignesPaie, baseSalaries]);
+  }, [lignesPaie, baseSalaries, moisActif]);
 
+  // Séquence de chargement initial & rafraîchissement F5 (Supabase prioritaire)
   useEffect(() => {
-    recalculerRapprochements();
-  }, [recalculerRapprochements]);
+    let ignore = false;
+    async function chargerDepuisSupabaseOuCache() {
+      console.log('[SUPABASE-SYNC] lecture après refresh', { moisActif });
+      try {
+        // 1. Supabase en priorité absolue
+        const supaRaps = await supabasePersistenceService.getRapprochementsPeriode(moisActif);
+        if (!ignore && supaRaps && supaRaps.length > 0) {
+          persistenceService.saveRapprochementsPeriode(moisActif, supaRaps);
+          setRapprochements(supaRaps);
+          return;
+        }
+      } catch (err) {
+        console.warn('[SUPABASE-SYNC] Erreur lecture Supabase, bascule sur cache local', err);
+      }
+
+      // 2. Cache local (localStorage)
+      const cacheRaps = persistenceService.getRapprochementsPeriode(moisActif);
+      if (!ignore && cacheRaps && cacheRaps.length > 0) {
+        setRapprochements(cacheRaps);
+        return;
+      }
+
+      // 3. Premier calcul par défaut si aucune donnée existante
+      if (!ignore && lignesPaie.length > 0) {
+        const init = executerRapprochement(lignesPaie, baseSalaries);
+        setRapprochements(init);
+        persistenceService.saveRapprochementsPeriode(moisActif, init);
+        supabasePersistenceService.saveRapprochementsPeriode(moisActif, init).catch(() => {});
+      }
+    }
+
+    chargerDepuisSupabaseOuCache();
+    return () => {
+      ignore = true;
+    };
+  }, [moisActif]);
 
   // Contrôles et anomalies calculées dynamiquement
   const anomalies = useMemo(() => {
@@ -421,201 +492,276 @@ export default function App() {
 
   // -------------------------------------------------------------------------
   // ARBITRAGES MÉTIER & VALIDATION FACE-À-FACE (Section 6, 7, 8, 15, 16)
+  // PERSISTANCE SUPABASE PRIORITAIRE & PROTECTION ANTI-ÉCRASEMENT F5 (PROMPT 16)
   // -------------------------------------------------------------------------
 
-  const handleValiderCorrespondance = (idRapprochement: string, memoriserAlias: boolean) => {
-    if (statutPeriode === 'CLOTURE') return;
+  // Helper centralisé de persistance atomique Supabase + Local Cache
+  const persisterRapprochements = async (
+    nouveauxRaps: ResultatRapprochement[],
+    messageSucces?: string
+  ): Promise<boolean> => {
+    try {
+      // 1. Écriture Supabase prioritaire
+      await supabasePersistenceService.saveRapprochementsPeriode(moisActif, nouveauxRaps);
 
-    setRapprochements(prev => prev.map(rap => {
-      if (rap.id !== idRapprochement) return rap;
+      // 2. Mise à jour cache local après succès Supabase
+      persistenceService.saveRapprochementsPeriode(moisActif, nouveauxRaps);
 
-      if (memoriserAlias && rap.salariePropose) {
-        persistenceService.ajouterAlias({
-          aliasBrut: rap.nomDeclareFinal || rap.salariePropose.nomComplet,
-          salarieId: rap.salariePropose.id,
-          nomOfficielSalarie: rap.salariePropose.nomComplet,
-          cniSalarie: rap.salariePropose.cni,
-          cnssSalarie: rap.salariePropose.immatriculationCnss,
-          creeParMois: moisActif,
-        });
-        setAliases(persistenceService.getAliases());
+      // 3. Mise à jour état React
+      setRapprochements(nouveauxRaps);
+
+      if (messageSucces) {
+        afficherNotification(messageSucces);
       }
-
-      // Enregistrement d'audit (Section 16)
-      persistenceService.enregistrerEvenementAudit({
-        id: `audit_val_${Date.now()}`,
-        date: new Date().toISOString(),
-        action: 'VALIDATION_CORRESPONDANCE',
-        salarie: rap.salariePropose?.nomComplet || rap.lignePaieId,
-        utilisateur: 'Gestionnaire MULT.S',
-        nouvelleValeur: `Validé -> ${rap.salariePropose?.nomComplet} (Score: ${rap.score}%)`,
-        justification: memoriserAlias ? 'Validation avec mémorisation d\'alias permanent' : 'Validation humaine de la proposition',
-      });
-
-      const entreeHisto: HistoriqueDecision = {
-        id: `h_${Date.now()}`,
-        lignePaieId: rap.lignePaieId,
-        dateHeure: new Date().toISOString(),
-        typeValidation: rap.score >= 90 ? 'VALIDATION_RAPIDE' : 'VALIDATION_FUZZY',
-        ancienStatut: rap.validation,
-        nouveauStatut: 'VALIDE',
-        salarieSelectionneId: rap.salariePropose?.id,
-        nomSalarieSelectionne: rap.salariePropose?.nomComplet,
-        aliasCree: memoriserAlias ? rap.salariePropose?.nomComplet : undefined,
-      };
-
-      return {
-        ...rap,
-        validation: 'VALIDE',
-        valideParHumain: true,
-        dateValidation: new Date().toISOString(),
-        enregistrerCommeAlias: memoriserAlias,
-        dateDecision: new Date().toISOString(),
-        nomDeclareFinal: rap.salariePropose?.nomComplet,
-        cniDeclareeFinale: rap.salariePropose?.cni,
-        cnssDeclareeFinale: rap.salariePropose?.immatriculationCnss,
-        historique: [...(rap.historique || []), entreeHisto],
-      };
-    }));
-
-    afficherNotification('Correspondance validée avec succès.');
+      return true;
+    } catch (err: any) {
+      console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+      afficherNotification(`Échec de persistance Supabase : ${err.message || 'Erreur réseau'}`);
+      return false;
+    }
   };
 
-  const handleRefuserCorrespondance = (idRapprochement: string) => {
+  const handleValiderCorrespondance = async (idRapprochement: string, memoriserAlias: boolean) => {
     if (statutPeriode === 'CLOTURE') return;
 
-    setRapprochements(prev => prev.map(rap => {
+    const rapCible = rapprochements.find(r => r.id === idRapprochement);
+    if (!rapCible) return;
+
+    const salarieFinal = rapCible.salariePropose;
+    const entreeHisto: HistoriqueDecision = {
+      id: `h_${Date.now()}`,
+      lignePaieId: rapCible.lignePaieId,
+      dateHeure: new Date().toISOString(),
+      typeValidation: rapCible.score >= 90 ? 'VALIDATION_RAPIDE' : 'VALIDATION_FUZZY',
+      ancienStatut: rapCible.validation,
+      nouveauStatut: 'VALIDE',
+      salarieSelectionneId: salarieFinal?.id,
+      nomSalarieSelectionne: salarieFinal?.nomComplet,
+      aliasCree: memoriserAlias ? salarieFinal?.nomComplet : undefined,
+    };
+
+    const rapValide: ResultatRapprochement = {
+      ...rapCible,
+      validation: 'VALIDE',
+      valideParHumain: true,
+      statutP5: 'IDENTIFIE',
+      dateValidation: new Date().toISOString(),
+      enregistrerCommeAlias: memoriserAlias,
+      dateDecision: new Date().toISOString(),
+      nomDeclareFinal: salarieFinal?.nomComplet,
+      cniDeclareeFinale: salarieFinal?.cni,
+      cnssDeclareeFinale: salarieFinal?.immatriculationCnss,
+      historique: [...(rapCible.historique || []), entreeHisto],
+    };
+
+    const nouveauxRaps = rapprochements.map(r => (r.id === idRapprochement ? rapValide : r));
+
+    const succes = await persisterRapprochements(
+      nouveauxRaps,
+      'Correspondance validée et enregistrée dans Supabase.'
+    );
+    if (!succes) return;
+
+    if (memoriserAlias && salarieFinal) {
+      const aliasObj: AliasItem = {
+        id: `alias_${Date.now()}`,
+        aliasBrut: rapValide.nomDeclareFinal || salarieFinal.nomComplet,
+        aliasNormalise: (rapValide.nomDeclareFinal || salarieFinal.nomComplet).toUpperCase().trim(),
+        salarieId: salarieFinal.id,
+        nomOfficielSalarie: salarieFinal.nomComplet,
+        cniSalarie: salarieFinal.cni,
+        cnssSalarie: salarieFinal.immatriculationCnss,
+        creeParMois: moisActif,
+        dateCreation: new Date().toISOString(),
+      };
+      await supabasePersistenceService.saveAlias(aliasObj);
+      persistenceService.ajouterAlias(aliasObj);
+      setAliases(persistenceService.getAliases());
+    }
+
+    const auditEvt: EvenementAudit = {
+      id: `audit_val_${Date.now()}`,
+      date: new Date().toISOString(),
+      action: 'VALIDATION_CORRESPONDANCE',
+      salarie: salarieFinal?.nomComplet || rapCible.lignePaieId,
+      utilisateur: 'Gestionnaire MULT.S',
+      nouvelleValeur: `Validé -> ${salarieFinal?.nomComplet} (Score: ${rapCible.score}%)`,
+      justification: memoriserAlias ? 'Validation avec mémorisation d\'alias permanent' : 'Validation humaine de la proposition',
+    };
+    await supabasePersistenceService.enregistrerEvenementAudit(auditEvt);
+    persistenceService.enregistrerEvenementAudit(auditEvt);
+  };
+
+  const handleRefuserCorrespondance = async (idRapprochement: string) => {
+    if (statutPeriode === 'CLOTURE') return;
+
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
       return {
         ...rap,
-        validation: 'REJETE',
+        validation: 'REJETE' as const,
         valideParHumain: true,
         dateDecision: new Date().toISOString(),
       };
-    }));
+    });
+
+    await persisterRapprochements(nouveauxRaps, 'Correspondance rejetée.');
   };
 
-  const handleConfirmerNouveau = (idRapprochement: string) => {
+  const handleConfirmerNouveau = async (idRapprochement: string) => {
     if (statutPeriode === 'CLOTURE') return;
 
-    setRapprochements(prev => prev.map(rap => {
+    const rapCible = rapprochements.find(r => r.id === idRapprochement);
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
-
-      persistenceService.enregistrerEvenementAudit({
-        id: `audit_nouv_${Date.now()}`,
-        date: new Date().toISOString(),
-        action: 'CREATION_SALARIE',
-        salarie: rap.nomDeclareFinal || rap.lignePaieId,
-        utilisateur: 'Gestionnaire MULT.S',
-        nouvelleValeur: 'NOUVEAU_CONFIRME',
-        justification: 'Confirmation manuelle comme nouveau salarié entrant',
-      });
-
       return {
         ...rap,
-        validation: 'VALIDE',
+        validation: 'VALIDE' as const,
         estMarqueNouveau: true,
         valideParHumain: true,
+        statutP5: 'NOUVEAU_CONFIRME' as const,
         dateDecision: new Date().toISOString(),
       };
-    }));
+    });
 
-    afficherNotification('Nouveau salarié confirmé pour ce mois.');
+    const succes = await persisterRapprochements(nouveauxRaps, 'Nouveau salarié confirmé pour ce mois.');
+    if (!succes) return;
+
+    const auditEvt: EvenementAudit = {
+      id: `audit_nouv_${Date.now()}`,
+      date: new Date().toISOString(),
+      action: 'CREATION_SALARIE',
+      salarie: rapCible?.nomDeclareFinal || rapCible?.lignePaieId || 'Nouveau',
+      utilisateur: 'Gestionnaire MULT.S',
+      nouvelleValeur: 'NOUVEAU_CONFIRME',
+      justification: 'Confirmation manuelle comme nouveau salarié entrant',
+    };
+    await supabasePersistenceService.enregistrerEvenementAudit(auditEvt);
+    persistenceService.enregistrerEvenementAudit(auditEvt);
   };
 
-  const handleChoisirCandidatAmbigu = (idRapprochement: string, salarieId: string, memoriserAlias: boolean) => {
+  const handleChoisirCandidatAmbigu = async (
+    idRapprochement: string,
+    salarieId: string,
+    memoriserAlias: boolean
+  ) => {
     if (statutPeriode === 'CLOTURE') return;
     const salarieChoisi = baseSalaries.find(s => s.id === salarieId);
     if (!salarieChoisi) return;
 
-    setRapprochements(prev => prev.map(rap => {
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
-
-      if (memoriserAlias) {
-        persistenceService.ajouterAlias({
-          aliasBrut: rap.nomDeclareFinal || salarieChoisi.nomComplet,
-          salarieId: salarieChoisi.id,
-          nomOfficielSalarie: salarieChoisi.nomComplet,
-          cniSalarie: salarieChoisi.cni,
-          cnssSalarie: salarieChoisi.immatriculationCnss,
-          creeParMois: moisActif,
-        });
-        setAliases(persistenceService.getAliases());
-      }
-
-      persistenceService.enregistrerEvenementAudit({
-        id: `audit_amb_${Date.now()}`,
-        date: new Date().toISOString(),
-        action: 'CHANGEMENT_SALARIE',
-        salarie: salarieChoisi.nomComplet,
-        utilisateur: 'Gestionnaire MULT.S',
-        nouvelleValeur: `Choix sur cas ambigu -> ${salarieChoisi.nomComplet}`,
-        justification: 'Arbitrage humain sur profil ambigu',
-      });
-
       return {
         ...rap,
-        validation: 'VALIDE',
+        validation: 'VALIDE' as const,
         valideParHumain: true,
         estAmbigu: false,
+        statutP5: 'IDENTIFIE' as const,
+        salarieBaseId: salarieChoisi.id,
         salariePropose: salarieChoisi,
         nomDeclareFinal: salarieChoisi.nomComplet,
         cniDeclareeFinale: salarieChoisi.cni,
         cnssDeclareeFinale: salarieChoisi.immatriculationCnss,
         dateDecision: new Date().toISOString(),
       };
-    }));
+    });
 
-    afficherNotification(`Candidat ${salarieChoisi.nomComplet} sélectionné.`);
+    const succes = await persisterRapprochements(
+      nouveauxRaps,
+      `Candidat ${salarieChoisi.nomComplet} sélectionné et validé.`
+    );
+    if (!succes) return;
+
+    if (memoriserAlias) {
+      const aliasObj: AliasItem = {
+        id: `alias_${Date.now()}`,
+        aliasBrut: salarieChoisi.nomComplet,
+        aliasNormalise: salarieChoisi.nomNormalise,
+        salarieId: salarieChoisi.id,
+        nomOfficielSalarie: salarieChoisi.nomComplet,
+        cniSalarie: salarieChoisi.cni,
+        cnssSalarie: salarieChoisi.immatriculationCnss,
+        creeParMois: moisActif,
+        dateCreation: new Date().toISOString(),
+      };
+      await supabasePersistenceService.saveAlias(aliasObj);
+      persistenceService.ajouterAlias(aliasObj);
+      setAliases(persistenceService.getAliases());
+    }
+
+    const auditEvt: EvenementAudit = {
+      id: `audit_amb_${Date.now()}`,
+      date: new Date().toISOString(),
+      action: 'CHANGEMENT_SALARIE',
+      salarie: salarieChoisi.nomComplet,
+      utilisateur: 'Gestionnaire MULT.S',
+      nouvelleValeur: `Choix sur cas ambigu -> ${salarieChoisi.nomComplet}`,
+      justification: 'Arbitrage humain sur profil ambigu',
+    };
+    await supabasePersistenceService.enregistrerEvenementAudit(auditEvt);
+    persistenceService.enregistrerEvenementAudit(auditEvt);
   };
 
-  const handleRattacherManuellement = (idRapprochement: string, salarieId: string, memoriserAlias: boolean) => {
+  const handleRattacherManuellement = async (
+    idRapprochement: string,
+    salarieId: string,
+    memoriserAlias: boolean
+  ) => {
     if (statutPeriode === 'CLOTURE') return;
     const salarieChoisi = baseSalaries.find(s => s.id === salarieId);
     if (!salarieChoisi) return;
 
-    setRapprochements(prev => prev.map(rap => {
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
-
-      if (memoriserAlias) {
-        persistenceService.ajouterAlias({
-          aliasBrut: rap.nomDeclareFinal || salarieChoisi.nomComplet,
-          salarieId: salarieChoisi.id,
-          nomOfficielSalarie: salarieChoisi.nomComplet,
-          cniSalarie: salarieChoisi.cni,
-          cnssSalarie: salarieChoisi.immatriculationCnss,
-          creeParMois: moisActif,
-        });
-        setAliases(persistenceService.getAliases());
-      }
-
-      persistenceService.enregistrerEvenementAudit({
-        id: `audit_rat_${Date.now()}`,
-        date: new Date().toISOString(),
-        action: 'CHANGEMENT_SALARIE',
-        salarie: salarieChoisi.nomComplet,
-        utilisateur: 'Gestionnaire MULT.S',
-        nouvelleValeur: `Rattaché manuellement -> ${salarieChoisi.nomComplet}`,
-        justification: 'Rattachement manuel via recherche référentielle',
-      });
-
       return {
         ...rap,
-        statut: 'MANUEL',
-        validation: 'VALIDE',
+        statut: 'MANUEL' as const,
+        validation: 'VALIDE' as const,
         valideParHumain: true,
+        statutP5: 'IDENTIFIE' as const,
+        salarieBaseId: salarieChoisi.id,
         salariePropose: salarieChoisi,
         nomDeclareFinal: salarieChoisi.nomComplet,
         cniDeclareeFinale: salarieChoisi.cni,
         cnssDeclareeFinale: salarieChoisi.immatriculationCnss,
         dateDecision: new Date().toISOString(),
       };
-    }));
+    });
 
-    afficherNotification(`Rattaché à ${salarieChoisi.nomComplet}.`);
+    const succes = await persisterRapprochements(nouveauxRaps, `Rattaché à ${salarieChoisi.nomComplet}.`);
+    if (!succes) return;
+
+    if (memoriserAlias) {
+      const aliasObj: AliasItem = {
+        id: `alias_${Date.now()}`,
+        aliasBrut: salarieChoisi.nomComplet,
+        aliasNormalise: salarieChoisi.nomNormalise,
+        salarieId: salarieChoisi.id,
+        nomOfficielSalarie: salarieChoisi.nomComplet,
+        cniSalarie: salarieChoisi.cni,
+        cnssSalarie: salarieChoisi.immatriculationCnss,
+        creeParMois: moisActif,
+        dateCreation: new Date().toISOString(),
+      };
+      await supabasePersistenceService.saveAlias(aliasObj);
+      persistenceService.ajouterAlias(aliasObj);
+      setAliases(persistenceService.getAliases());
+    }
+
+    const auditEvt: EvenementAudit = {
+      id: `audit_rat_${Date.now()}`,
+      date: new Date().toISOString(),
+      action: 'CHANGEMENT_SALARIE',
+      salarie: salarieChoisi.nomComplet,
+      utilisateur: 'Gestionnaire MULT.S',
+      nouvelleValeur: `Rattaché manuellement -> ${salarieChoisi.nomComplet}`,
+      justification: 'Rattachement manuel via recherche référentielle',
+    };
+    await supabasePersistenceService.enregistrerEvenementAudit(auditEvt);
+    persistenceService.enregistrerEvenementAudit(auditEvt);
   };
 
-  const handleCreerNouveauSalarieEtRattacher = (
+  const handleCreerNouveauSalarieEtRattacher = async (
     idRapprochement: string,
     nom: string,
     cni?: string,
@@ -630,16 +776,18 @@ export default function App() {
       datePremiereApparition: moisActif,
     });
 
+    await supabasePersistenceService.saveSalarie(creation.salarie);
     const nouvelleBase = persistenceService.getSalaries();
     setBaseSalaries(nouvelleBase);
 
-    setRapprochements(prev => prev.map(rap => {
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
       return {
         ...rap,
-        validation: 'VALIDE',
+        validation: 'VALIDE' as const,
         estMarqueNouveau: true,
         valideParHumain: true,
+        statutP5: 'NOUVEAU_CONFIRME' as const,
         salarieBaseId: creation.salarie.id,
         salariePropose: creation.salarie,
         nomDeclareFinal: creation.salarie.nomComplet,
@@ -647,157 +795,187 @@ export default function App() {
         cnssDeclareeFinale: creation.salarie.immatriculationCnss,
         dateDecision: new Date().toISOString(),
       };
-    }));
+    });
 
-    afficherNotification(`Salarié créé avec ID ${creation.salarie.id}.`);
+    await persisterRapprochements(nouveauxRaps, `Salarié créé avec ID ${creation.salarie.id}.`);
   };
 
-  const handleArbitrerSortiRetravaillant = (idRapprochement: string, action: 'REACTIVATION_CONFIRMEE' | 'CONSERVE_SORTI') => {
+  const handleArbitrerSortiRetravaillant = async (
+    idRapprochement: string,
+    action: 'REACTIVATION_CONFIRMEE' | 'CONSERVE_SORTI'
+  ) => {
     if (statutPeriode === 'CLOTURE') return;
 
-    setRapprochements(prev => prev.map(rap => {
+    const rapCible = rapprochements.find(r => r.id === idRapprochement);
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
-
-      persistenceService.enregistrerEvenementAudit({
-        id: `audit_sorti_arb_${Date.now()}`,
-        date: new Date().toISOString(),
-        action: action === 'REACTIVATION_CONFIRMEE' ? 'REACTIVATION_SALARIE' : 'CONFIRMATION_SORTIE',
-        salarie: rap.salariePropose?.nomComplet || rap.lignePaieId,
-        utilisateur: 'Gestionnaire MULT.S',
-        nouvelleValeur: action,
-        justification: action === 'REACTIVATION_CONFIRMEE' ? 'Réactivation confirmée pour déclaration CNSS' : 'Salarié maintenu sorti',
-      });
-
       return {
         ...rap,
         decisionSorti: action,
-        validation: action === 'REACTIVATION_CONFIRMEE' ? 'VALIDE' : rap.validation,
+        validation: (action === 'REACTIVATION_CONFIRMEE' ? 'VALIDE' : rap.validation) as any,
+        statutP5: (action === 'REACTIVATION_CONFIRMEE' ? 'IDENTIFIE' : rap.statutP5) as any,
         valideParHumain: true,
         dateDecision: new Date().toISOString(),
       };
-    }));
+    });
 
-    afficherNotification(action === 'REACTIVATION_CONFIRMEE' ? 'Réactivation confirmée.' : 'Maintien du statut sorti.');
+    const succes = await persisterRapprochements(
+      nouveauxRaps,
+      action === 'REACTIVATION_CONFIRMEE' ? 'Réactivation confirmée.' : 'Maintien du statut sorti.'
+    );
+    if (!succes) return;
+
+    const auditEvt: EvenementAudit = {
+      id: `audit_sorti_arb_${Date.now()}`,
+      date: new Date().toISOString(),
+      action: action === 'REACTIVATION_CONFIRMEE' ? 'REACTIVATION_SALARIE' : 'CONFIRMATION_SORTIE',
+      salarie: rapCible?.salariePropose?.nomComplet || rapCible?.lignePaieId || 'Salarié sorti',
+      utilisateur: 'Gestionnaire MULT.S',
+      nouvelleValeur: action,
+      justification: action === 'REACTIVATION_CONFIRMEE' ? 'Réactivation confirmée pour déclaration CNSS' : 'Salarié maintenu sorti',
+    };
+    await supabasePersistenceService.enregistrerEvenementAudit(auditEvt);
+    persistenceService.enregistrerEvenementAudit(auditEvt);
   };
 
-  const handleReinitialiserLigne = (idRapprochement: string) => {
+  const handleReinitialiserLigne = async (idRapprochement: string) => {
     if (statutPeriode === 'CLOTURE') return;
     const ligneInit = lignesPaie.find(l => `rap_${l.id}` === idRapprochement);
     if (!ligneInit) return;
     const rapInitial = rapprocherLigne(ligneInit, baseSalaries);
-    setRapprochements(prev => prev.map(r => r.id === idRapprochement ? rapInitial : r));
+    const nouveauxRaps = rapprochements.map(r => (r.id === idRapprochement ? rapInitial : r));
+    await persisterRapprochements(nouveauxRaps, 'Ligne réinitialisée au statut initial.');
   };
 
-  const handleValiderCorrectionJours = (idRapprochement: string, joursDeclares: number, justification: string) => {
+  const handleValiderCorrectionJours = async (
+    idRapprochement: string,
+    joursDeclares: number,
+    justification: string
+  ) => {
     if (statutPeriode === 'CLOTURE') return;
 
-    setRapprochements(prev => prev.map(rap => {
+    const rapCible = rapprochements.find(r => r.id === idRapprochement);
+    if (!rapCible) return;
+
+    const nouvelleValidationJours = validationEngine.corrigerJoursHumainement(
+      rapCible.validationJours,
+      joursDeclares,
+      justification
+    );
+
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
-
-      const nouvelleValidationJours = validationEngine.corrigerJoursHumainement(
-        rap.validationJours,
-        joursDeclares,
-        justification
-      );
-
-      persistenceService.enregistrerEvenementAudit({
-        id: `audit_j_${Date.now()}`,
-        date: new Date().toISOString(),
-        action: 'MODIFICATION_JOURS',
-        salarie: rap.nomDeclareFinal || rap.salariePropose?.nomComplet || rap.lignePaieId,
-        utilisateur: 'Gestionnaire MULT.S',
-        ancienneValeur: `${rap.validationJours.joursImportes} j importés`,
-        nouvelleValeur: `${joursDeclares} j déclarés`,
-        justification,
-      });
-
       return {
         ...rap,
-        validation: 'VALIDE',
+        validation: 'VALIDE' as const,
+        statutP5: 'IDENTIFIE' as const,
         valideParHumain: true,
         validationJours: nouvelleValidationJours,
         dateDecision: new Date().toISOString(),
       };
-    }));
+    });
 
-    afficherNotification(`Jours ajustés à ${joursDeclares} j (valeur importée ${joursDeclares} intacte).`);
+    const succes = await persisterRapprochements(
+      nouveauxRaps,
+      `Jours ajustés à ${joursDeclares} j (valeur importée ${rapCible.validationJours.joursImportes} j intacte).`
+    );
+    if (!succes) return;
+
+    const auditEvt: EvenementAudit = {
+      id: `audit_j_${Date.now()}`,
+      date: new Date().toISOString(),
+      action: 'MODIFICATION_JOURS',
+      salarie: rapCible.nomDeclareFinal || rapCible.salariePropose?.nomComplet || rapCible.lignePaieId,
+      utilisateur: 'Gestionnaire MULT.S',
+      ancienneValeur: `${rapCible.validationJours.joursImportes} j importés`,
+      nouvelleValeur: `${joursDeclares} j déclarés`,
+      justification,
+    };
+    await supabasePersistenceService.enregistrerEvenementAudit(auditEvt);
+    persistenceService.enregistrerEvenementAudit(auditEvt);
   };
 
-  const handleCompleterCni = (idRapprochement: string, cni?: string, cnss?: string) => {
+  const handleCompleterCni = async (idRapprochement: string, cni?: string, cnss?: string) => {
     if (statutPeriode === 'CLOTURE') return;
-    setRapprochements(prev => prev.map(rap => {
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
       return {
         ...rap,
         ...(cni !== undefined ? { cniDeclareeFinale: cni.trim().toUpperCase() } : {}),
         ...(cnss !== undefined ? { cnssDeclareeFinale: cnss.trim() } : {}),
       };
-    }));
+    });
+    await persisterRapprochements(nouveauxRaps);
   };
 
-  const handleCompleterCnss = (idRapprochement: string, cnss: string) => {
+  const handleCompleterCnss = async (idRapprochement: string, cnss: string) => {
     if (statutPeriode === 'CLOTURE') return;
-    setRapprochements(prev => prev.map(rap => {
+    const nouveauxRaps = rapprochements.map(rap => {
       if (rap.id !== idRapprochement) return rap;
       return { ...rap, cnssDeclareeFinale: cnss.trim() };
-    }));
+    });
+    await persisterRapprochements(nouveauxRaps);
   };
 
-  const handleSauvegarderModificationsAnomalie = (
+  const handleSauvegarderModificationsAnomalie = async (
     idRapprochement: string,
     donnees: DonneesModificationAnomalie
   ) => {
     if (statutPeriode === 'CLOTURE') return;
 
-    // 1. Mise à jour de la décision de sortie si applicable
-    if (donnees.decisionSorti) {
-      handleArbitrerSortiRetravaillant(idRapprochement, donnees.decisionSorti);
-    }
+    const rapCible = rapprochements.find(r => r.id === idRapprochement);
+    if (!rapCible) return;
 
-    // 2. Si un candidat ambigu a été choisi
+    let salarieFinal = rapCible.salariePropose;
     if (donnees.salarieChoisiId) {
-      handleChoisirCandidatAmbigu(idRapprochement, donnees.salarieChoisiId, donnees.memoriserAlias ?? true);
+      const salChoisi = baseSalaries.find(s => s.id === donnees.salarieChoisiId);
+      if (salChoisi) salarieFinal = salChoisi;
     }
 
-    // 3. Mise à jour des données du rapprochement
-    setRapprochements(prev => prev.map(rap => {
-      if (rap.id !== idRapprochement) return rap;
+    let nouvelleValidationJours = rapCible.validationJours;
+    if (donnees.joursDeclares !== undefined) {
+      nouvelleValidationJours = validationEngine.corrigerJoursHumainement(
+        rapCible.validationJours,
+        donnees.joursDeclares,
+        donnees.justificationJours || 'Ajusté par le gestionnaire'
+      );
 
-      let nouvelleValidationJours = rap.validationJours;
-      if (donnees.joursDeclares !== undefined) {
-        nouvelleValidationJours = validationEngine.corrigerJoursHumainement(
-          rap.validationJours,
-          donnees.joursDeclares,
-          donnees.justificationJours || 'Ajusté par le gestionnaire'
-        );
-
-        persistenceService.enregistrerEvenementAudit({
-          id: `audit_j_${Date.now()}`,
-          date: new Date().toISOString(),
-          action: 'MODIFICATION_JOURS',
-          salarie: donnees.nom || rap.nomDeclareFinal || rap.lignePaieId,
-          utilisateur: 'Gestionnaire MULT.S',
-          ancienneValeur: `${rap.validationJours.joursImportes} j importés`,
-          nouvelleValeur: `${donnees.joursDeclares} j déclarés`,
-          justification: donnees.justificationJours || 'Ajusté par le gestionnaire',
-        });
-      }
-
-      const rapMaj: ResultatRapprochement = {
-        ...rap,
-        validation: 'VALIDE',
-        valideParHumain: true,
-        validationJours: nouvelleValidationJours,
-        ...(donnees.nom ? { nomDeclareFinal: donnees.nom } : {}),
-        ...(donnees.cni ? { cniDeclareeFinale: donnees.cni } : {}),
-        ...(donnees.cnss ? { cnssDeclareeFinale: donnees.cnss } : {}),
-        dateDecision: new Date().toISOString(),
+      const auditJours: EvenementAudit = {
+        id: `audit_j_${Date.now()}`,
+        date: new Date().toISOString(),
+        action: 'MODIFICATION_JOURS',
+        salarie: donnees.nom || rapCible.nomDeclareFinal || rapCible.lignePaieId,
+        utilisateur: 'Gestionnaire MULT.S',
+        ancienneValeur: `${rapCible.validationJours.joursImportes} j importés`,
+        nouvelleValeur: `${donnees.joursDeclares} j déclarés`,
+        justification: donnees.justificationJours || 'Ajusté par le gestionnaire',
       };
+      await supabasePersistenceService.enregistrerEvenementAudit(auditJours);
+      persistenceService.enregistrerEvenementAudit(auditJours);
+    }
 
-      return rapMaj;
-    }));
+    const rapMaj: ResultatRapprochement = {
+      ...rapCible,
+      validation: 'VALIDE',
+      valideParHumain: true,
+      statutP5: 'IDENTIFIE',
+      validationJours: nouvelleValidationJours,
+      salarieBaseId: salarieFinal?.id || rapCible.salarieBaseId,
+      salariePropose: salarieFinal,
+      nomDeclareFinal: donnees.nom || salarieFinal?.nomComplet || rapCible.nomDeclareFinal,
+      cniDeclareeFinale: donnees.cni || salarieFinal?.cni || rapCible.cniDeclareeFinale,
+      cnssDeclareeFinale: donnees.cnss || salarieFinal?.immatriculationCnss || rapCible.cnssDeclareeFinale,
+      decisionSorti: donnees.decisionSorti || rapCible.decisionSorti,
+      estAmbigu: false,
+      dateDecision: new Date().toISOString(),
+    };
 
-    // 4. Si levée manuelle de l'anomalie avec justification
+    const nouveauxRaps = rapprochements.map(rap => (rap.id === idRapprochement ? rapMaj : rap));
+
+    const succes = await persisterRapprochements(nouveauxRaps, 'Modifications enregistrées et validées avec succès.');
+    if (!succes) return;
+
+    // Si levée d'anomalie spécifique par ID
     if (donnees.leverAnomalie && donnees.anomalieId) {
       persistenceService.saveAnomalieResolueManuellement(
         moisActif,
@@ -806,7 +984,7 @@ export default function App() {
       );
       setAnomaliesResoluesManuellement(persistenceService.getAnomaliesResoluesManuellement(moisActif));
 
-      persistenceService.enregistrerEvenementAudit({
+      const auditLevee: EvenementAudit = {
         id: `audit_ano_levee_${Date.now()}`,
         date: new Date().toISOString(),
         action: 'LEVEE_ANOMALIE_MANUELLE',
@@ -814,10 +992,10 @@ export default function App() {
         utilisateur: 'Gestionnaire MULT.S',
         nouvelleValeur: 'ANOMALIE_LEVEE',
         justification: donnees.justificationLevee || 'Dérogation administrative enregistrée',
-      });
+      };
+      await supabasePersistenceService.enregistrerEvenementAudit(auditLevee);
+      persistenceService.enregistrerEvenementAudit(auditLevee);
     }
-
-    afficherNotification('Modifications et corrections enregistrées avec succès.');
   };
 
   const handleConfirmerSortie = (salarieId: string, nomSalarie: string) => {

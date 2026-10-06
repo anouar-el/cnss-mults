@@ -46,6 +46,11 @@ export interface SupabaseEntitiesStats {
  */
 class SupabasePersistenceService {
   private companyId: string = '6541835';
+  private simulerErreurSupabase: boolean = false;
+
+  public setSimulerErreurSupabase(val: boolean): void {
+    this.simulerErreurSupabase = val;
+  }
 
   // Miroir transactionnel structuré simulant les tables PostgreSQL Supabase
   private tables = {
@@ -157,9 +162,22 @@ class SupabasePersistenceService {
   async saveSalarie(salarie: SalarieReferentiel): Promise<void> {
     this.tables.employees.set(salarie.id, { ...salarie });
 
+    if (this.simulerErreurSupabase) {
+      console.error('[SUPABASE-SYNC] erreur UPDATE', { table: 'employees', id: salarie.id, cause: 'Simulation erreur' });
+      throw new Error('[SUPABASE-SYNC] Erreur simulée lors de l\'UPDATE du salarié');
+    }
+
     if (isSupabaseConfigured()) {
       try {
-        await supabase.from('employees').upsert({
+        console.log('[SUPABASE-SYNC] avant UPDATE', {
+          table: 'employees',
+          company_id: this.companyId,
+          business_id: salarie.id,
+          situation: salarie.situation,
+        });
+
+        const { data, error } = await supabase.from('employees').upsert({
+          company_id: this.companyId,
           business_id: salarie.id,
           full_name: salarie.nomComplet,
           normalized_name: salarie.nomNormalise,
@@ -170,8 +188,14 @@ class SupabasePersistenceService {
           first_seen_period: salarie.datePremiereApparition || '2026-09',
           last_declaration_period: salarie.derniereDeclaration || null,
         }, { onConflict: 'company_id,business_id' });
-      } catch {
-        // Non-bloquant
+
+        if (error) {
+          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
+        } else {
+          console.log('[SUPABASE-SYNC] résultat UPDATE', { table: 'employees', id: salarie.id, success: true, data });
+        }
+      } catch (err) {
+        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
       }
     }
   }
@@ -431,11 +455,281 @@ class SupabasePersistenceService {
   // 5b. RAPPROCHEMENTS (reconciliations)
   // =========================================================================
   async getRapprochementsPeriode(monthId: string): Promise<ResultatRapprochement[] | null> {
+    console.log('[SUPABASE-SYNC] lecture après refresh', { table: 'reconciliations', monthId });
+
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('reconciliations')
+          .select('*')
+          .eq('company_id', this.companyId)
+          .eq('period_id', monthId);
+
+        if (!error && data && data.length > 0) {
+          const mapped: ResultatRapprochement[] = data.map((row: any) => {
+            if (row.raw_data_json && typeof row.raw_data_json === 'object' && row.raw_data_json.id) {
+              return row.raw_data_json as ResultatRapprochement;
+            }
+            return {
+              id: row.id,
+              lignePaieId: row.payroll_line_id,
+              salarieBaseId: row.suggested_employee_id || undefined,
+              score: row.score || 0,
+              secondScore: row.second_score || undefined,
+              ecartScore: row.score_gap || undefined,
+              statut: row.status || 'CORRESPONDANCE_UNIQUE',
+              statutP5: row.p5_status || 'IDENTIFIE',
+              methode: row.method || 'AUCUNE',
+              explication: row.explanation || '',
+              validation: row.validation_status || 'A_VALIDER',
+              enregistrerCommeAlias: false,
+              valideParHumain: Boolean(row.is_human_validated),
+              estAmbigu: Boolean(row.is_ambiguous),
+              estMarqueNouveau: Boolean(row.is_new_employee_confirmed),
+              decisionSorti: row.departure_decision || undefined,
+              nomDeclareFinal: row.final_declared_name || undefined,
+              cniDeclareeFinale: row.final_declared_cni || undefined,
+              cnssDeclareeFinale: row.final_declared_cnss || undefined,
+              dateValidation: row.decision_date || undefined,
+              dateDecision: row.decision_date || undefined,
+              validationJours: {
+                joursImportes: Number(row.declared_days) || 0,
+                joursDeclares: Number(row.declared_days) || 0,
+                modifieManuellement: Boolean(row.days_manually_modified),
+                validationEffectuee: Boolean(row.is_human_validated),
+                justification: row.days_modification_justification || undefined,
+              },
+            };
+          });
+
+          this.tables.reconciliations.set(monthId, mapped);
+          return mapped;
+        }
+      } catch (err) {
+        console.error('[SUPABASE-SYNC] erreur lecture', err);
+      }
+    }
+
     return this.tables.reconciliations.get(monthId) || null;
   }
 
   async saveRapprochementsPeriode(monthId: string, lines: ResultatRapprochement[]): Promise<void> {
+    if (this.simulerErreurSupabase) {
+      console.error('[SUPABASE-SYNC] erreur UPDATE', {
+        period_id: monthId,
+        count: lines.length,
+        cause: 'Erreur Supabase simulée',
+      });
+      throw new Error('[SUPABASE-SYNC] Échec de la persistance Supabase (erreur simulée)');
+    }
+
+    console.log('[SUPABASE-SYNC] avant UPDATE', {
+      table: 'reconciliations',
+      period_id: monthId,
+      company_id: this.companyId,
+      count: lines.length,
+    });
+
+    if (isSupabaseConfigured()) {
+      try {
+        const rows = lines.map(line => ({
+          id: line.id,
+          company_id: this.companyId,
+          period_id: monthId,
+          payroll_line_id: line.lignePaieId,
+          suggested_employee_id: line.salariePropose?.id || line.salarieBaseId || null,
+          score: line.score,
+          second_score: line.secondScore || null,
+          score_gap: line.ecartScore || null,
+          method: line.methode || 'AUCUNE',
+          status: line.statut,
+          p5_status: line.statutP5 || 'IDENTIFIE',
+          validation_status: line.validation,
+          is_ambiguous: Boolean(line.estAmbigu),
+          is_human_validated: Boolean(line.valideParHumain),
+          is_new_employee_confirmed: Boolean(line.estMarqueNouveau),
+          departure_decision: line.decisionSorti || null,
+          declared_days: line.validationJours?.joursDeclares ?? line.validationJours?.joursImportes ?? 0,
+          days_modification_justification: line.validationJours?.justification || null,
+          days_manually_modified: Boolean(line.validationJours?.modifieManuellement),
+          final_declared_name: line.nomDeclareFinal || line.salariePropose?.nomComplet || null,
+          final_declared_cni: line.cniDeclareeFinale || line.salariePropose?.cni || null,
+          final_declared_cnss: line.cnssDeclareeFinale || line.salariePropose?.immatriculationCnss || null,
+          decision_date: line.dateDecision || line.dateValidation || new Date().toISOString(),
+          raw_data_json: line,
+          updated_at: new Date().toISOString(),
+        }));
+
+        const { data, error } = await supabase
+          .from('reconciliations')
+          .upsert(rows, { onConflict: 'period_id,payroll_line_id' });
+
+        if (error) {
+          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
+          if (error.code !== 'PGRST205') {
+            throw new Error(`[SUPABASE-SYNC] Erreur Supabase (${error.code || 'UNKNOWN'}) : ${error.message}`);
+          }
+        } else {
+          console.log('[SUPABASE-SYNC] résultat UPDATE', { period_id: monthId, count: rows.length, success: true, data });
+        }
+      } catch (err: any) {
+        if (err.message?.includes('[SUPABASE-SYNC]')) {
+          throw err;
+        }
+        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+      }
+    }
+
     this.tables.reconciliations.set(monthId, JSON.parse(JSON.stringify(lines)));
+  }
+
+  async validerSalarieRapprochement(
+    monthId: string,
+    idRapprochement: string,
+    options: {
+      memoriserAlias?: boolean;
+      salarieChoisi?: SalarieReferentiel;
+      joursDeclares?: number;
+      justification?: string;
+      decisionSorti?: 'REACTIVATION_CONFIRMEE' | 'CONSERVE_SORTI';
+      estNouveau?: boolean;
+    } = {}
+  ): Promise<ResultatRapprochement> {
+    const raps = (await this.getRapprochementsPeriode(monthId)) || [];
+    const index = raps.findIndex(r => r.id === idRapprochement);
+    if (index === -1) {
+      throw new Error(`Rapprochement ${idRapprochement} introuvable pour la période ${monthId}`);
+    }
+
+    const ancien = raps[index];
+    const salarieFinal = options.salarieChoisi || ancien.salariePropose;
+    const joursFinals = options.joursDeclares ?? ancien.validationJours.joursDeclares;
+
+    const misAJour: ResultatRapprochement = {
+      ...ancien,
+      validation: 'VALIDE',
+      valideParHumain: true,
+      statutP5: 'IDENTIFIE',
+      dateValidation: new Date().toISOString(),
+      dateDecision: new Date().toISOString(),
+      salarieBaseId: salarieFinal?.id || ancien.salarieBaseId,
+      salariePropose: salarieFinal,
+      nomDeclareFinal: salarieFinal?.nomComplet || ancien.nomDeclareFinal,
+      cniDeclareeFinale: salarieFinal?.cni || ancien.cniDeclareeFinale,
+      cnssDeclareeFinale: salarieFinal?.immatriculationCnss || ancien.cnssDeclareeFinale,
+      estAmbigu: false,
+      estMarqueNouveau: options.estNouveau ?? ancien.estMarqueNouveau,
+      decisionSorti: options.decisionSorti || ancien.decisionSorti,
+      validationJours: {
+        ...ancien.validationJours,
+        joursDeclares: joursFinals,
+        modifieManuellement: joursFinals !== ancien.validationJours.joursImportes,
+        validationEffectuee: true,
+        justification: options.justification || ancien.validationJours.justification,
+      },
+      historique: [
+        ...(ancien.historique || []),
+        {
+          id: `h_${Date.now()}`,
+          lignePaieId: ancien.lignePaieId,
+          dateHeure: new Date().toISOString(),
+          typeValidation: options.estNouveau ? 'CONFIRME_NOUVEAU' : 'MANUELLE',
+          ancienStatut: ancien.validation,
+          nouveauStatut: 'VALIDE',
+          salarieSelectionneId: salarieFinal?.id,
+          nomSalarieSelectionne: salarieFinal?.nomComplet,
+          aliasCree: options.memoriserAlias ? salarieFinal?.nomComplet : undefined,
+          commentaire: options.justification,
+        },
+      ],
+    };
+
+    console.log('[SUPABASE-SYNC] avant UPDATE', {
+      table: 'reconciliations',
+      reconciliation_id: idRapprochement,
+      employee_id: salarieFinal?.id,
+      period_id: monthId,
+      company_id: this.companyId,
+      statutValidation: 'VALIDE',
+      salarieFinalId: salarieFinal?.id,
+      joursDeclares: joursFinals,
+      situation: salarieFinal?.situation || 'ACTIF',
+      statut: 'IDENTIFIE',
+    });
+
+    if (this.simulerErreurSupabase) {
+      console.error('[SUPABASE-SYNC] erreur UPDATE', {
+        reconciliation_id: idRapprochement,
+        cause: 'Erreur Supabase simulée',
+      });
+      throw new Error('[SUPABASE-SYNC] Échec de la mise à jour Supabase (erreur simulée)');
+    }
+
+    if (isSupabaseConfigured()) {
+      try {
+        const payload = {
+          id: misAJour.id,
+          company_id: this.companyId,
+          period_id: monthId,
+          payroll_line_id: misAJour.lignePaieId,
+          suggested_employee_id: salarieFinal?.id || null,
+          score: misAJour.score,
+          status: misAJour.statut,
+          p5_status: 'IDENTIFIE',
+          validation_status: 'VALIDE',
+          is_ambiguous: false,
+          is_human_validated: true,
+          is_new_employee_confirmed: Boolean(misAJour.estMarqueNouveau),
+          departure_decision: misAJour.decisionSorti || null,
+          declared_days: joursFinals,
+          days_modification_justification: misAJour.validationJours?.justification || null,
+          days_manually_modified: Boolean(misAJour.validationJours?.modifieManuellement),
+          final_declared_name: misAJour.nomDeclareFinal || null,
+          final_declared_cni: misAJour.cniDeclareeFinale || null,
+          final_declared_cnss: misAJour.cnssDeclareeFinale || null,
+          decision_date: misAJour.dateValidation,
+          raw_data_json: misAJour,
+          updated_at: new Date().toISOString(),
+        };
+
+        const { data, error } = await supabase
+          .from('reconciliations')
+          .upsert(payload, { onConflict: 'period_id,payroll_line_id' });
+
+        if (error) {
+          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
+          if (error.code !== 'PGRST205') {
+            throw new Error(`[SUPABASE-SYNC] Erreur Supabase (${error.code || 'UNKNOWN'}) : ${error.message}`);
+          }
+        } else {
+          console.log('[SUPABASE-SYNC] résultat UPDATE', { id: idRapprochement, succes: true, data });
+        }
+      } catch (err: any) {
+        if (err.message?.includes('[SUPABASE-SYNC]')) {
+          throw err;
+        }
+        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+      }
+    }
+
+    raps[index] = misAJour;
+    this.tables.reconciliations.set(monthId, raps);
+
+    if (options.memoriserAlias && salarieFinal) {
+      await this.saveAlias({
+        id: `alias_${Date.now()}`,
+        aliasBrut: misAJour.nomDeclareFinal || salarieFinal.nomComplet,
+        aliasNormalise: (misAJour.nomDeclareFinal || salarieFinal.nomComplet).toUpperCase().trim(),
+        salarieId: salarieFinal.id,
+        nomOfficielSalarie: salarieFinal.nomComplet,
+        cniSalarie: salarieFinal.cni,
+        cnssSalarie: salarieFinal.immatriculationCnss,
+        creeParMois: monthId,
+        dateCreation: new Date().toISOString(),
+      });
+    }
+
+    return misAJour;
   }
 
   // =========================================================================
