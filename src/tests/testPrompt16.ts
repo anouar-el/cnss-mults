@@ -78,12 +78,13 @@ export async function executerTestsPrompt16(): Promise<BilanPrompt16> {
   const lignePaieTest: LignePaieImportee = {
     id: 'paie_p16_target',
     nomCompletBrut: 'BENJELLOUN KARIM',
+    nomNormalise: 'BENJELLOUN KARIM',
+    tokensNom: ['BENJELLOUN', 'KARIM'],
     cniImportee: 'BK998877',
     cnssImportee: '987654321',
     salaireBrut: 5500,
     joursImportes: 26,
-    mois: moisTest,
-    numeroLigne: 1,
+    ligneFichier: 1,
   };
 
   // =========================================================================
@@ -95,7 +96,7 @@ export async function executerTestsPrompt16(): Promise<BilanPrompt16> {
     salarieBaseId: salarieTest.id,
     salariePropose: salarieTest,
     score: 95,
-    statut: 'CORRESPONDANCE_UNIQUE',
+    statut: 'CORRESPONDANCE_CNI',
     statutP5: 'A_VALIDER',
     validation: 'A_VALIDER',
     valideParHumain: false,
@@ -209,7 +210,7 @@ export async function executerTestsPrompt16(): Promise<BilanPrompt16> {
       rapApresF5.salarieBaseId === 'sal_p16_target' &&
       rapApresF5.validationJours.joursDeclares === 26 &&
       rapApresF5.salariePropose?.situation === 'ACTIF' &&
-      rapApresF5.statut === 'CORRESPONDANCE_UNIQUE'
+      rapApresF5.statut === 'CORRESPONDANCE_CNI'
   );
 
   // =========================================================================
