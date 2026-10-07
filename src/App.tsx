@@ -80,6 +80,7 @@ import {
 } from './data/septembreRealData';
 import { excelService } from './services/excelService';
 import { rapprocherLigne, executerRapprochement } from './services/matchingEngine';
+import { normaliserSituation, normaliserCni, normaliserCnss } from './services/normalizer';
 import { validationEngine } from './services/validationEngine';
 import { persistenceService } from './services/persistenceService';
 import { supabasePersistenceService } from './services/supabasePersistenceService';
@@ -459,7 +460,38 @@ export default function App() {
     });
     setPeriodes(persistenceService.getPeriodes());
 
-    const raps = executerRapprochement(nouvellesLignes, baseSalaries);
+    // Synchronisation fidèle de la situation depuis le fichier importé vers la base des salariés
+    const baseMiseAJour = [...baseSalaries];
+    let aModifieBase = false;
+
+    nouvellesLignes.forEach(l => {
+      if (l.situationImportee) {
+        const sitNorm = normaliserSituation(l.situationImportee);
+        const sal = baseMiseAJour.find(s => {
+          if (l.cniImportee && s.cni && normaliserCni(s.cni) === normaliserCni(l.cniImportee)) return true;
+          if (l.cnssImportee && s.immatriculationCnss && normaliserCnss(s.immatriculationCnss) === normaliserCnss(l.cnssImportee)) return true;
+          if (s.nomNormalise === l.nomNormalise) return true;
+          return false;
+        });
+
+        if (sal) {
+          if (sal.situation !== sitNorm) {
+            sal.situation = sitNorm;
+            sal.situationOriginale = l.situationImportee;
+            sal.actif = sitNorm === 'ACTIF';
+            aModifieBase = true;
+          }
+        }
+      }
+    });
+
+    if (aModifieBase) {
+      setBaseSalaries(baseMiseAJour);
+      persistenceService.saveSalaries(baseMiseAJour);
+    }
+
+    const baseUtilisee = aModifieBase ? baseMiseAJour : baseSalaries;
+    const raps = executerRapprochement(nouvellesLignes, baseUtilisee);
     setRapprochements(raps);
     persistenceService.saveRapprochementsPeriode(moisActif, raps);
 

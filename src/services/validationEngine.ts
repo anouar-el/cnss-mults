@@ -122,7 +122,8 @@ export const validationEngine = {
       }
 
       // 7. SALARIÉ SORTI RETRAVAILLANT (Section 13) -> Avertissement
-      if (salariePropose && salariePropose.situation === 'SORTI' && (validationJours.joursDeclares ?? joursImp) > 0) {
+      const estSorti = (salariePropose && salariePropose.situation === 'SORTI') || rap.situationImportee === 'SORTI';
+      if (salariePropose && estSorti && (validationJours.joursDeclares ?? joursImp) > 0) {
         const estArbitre = rap.decisionSorti !== undefined;
         anomalies.push({
           id: `ano_sorti_jours_${id}`,

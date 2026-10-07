@@ -5,12 +5,16 @@
 export type SituationEmploye =
   | 'ACTIF'
   | 'SORTI'
+  | 'ENTRANT'
   | 'A_VERIFIER'
   | 'À_VÉRIFIER'
   | 'NOUVEAU'
   | 'INACTIF'
   | 'ACCIDENT_TRAVAIL'
-  | 'SUSPENDU';
+  | 'MALADIE'
+  | 'CONGE_MATERNITE'
+  | 'SUSPENDU'
+  | string;
 
 export interface SalarieReferentiel {
   id: string;
@@ -142,6 +146,7 @@ export interface ResultatRapprochement {
   nomDeclareFinal?: string;
   cniDeclareeFinale?: string;
   cnssDeclareeFinale?: string;
+  situationImportee?: string;
 }
 
 export interface HistoriqueDecision {
@@ -303,7 +308,8 @@ export interface LigneRegistreCnss {
   baseDeclaree: number;
   salaireBrutImporte: number;
   salaireBrutDeclare: number;
-  situation: SituationEmploye | 'ACTIF' | 'SORTI' | 'NOUVEAU' | 'INCONNU' | string;
+  situation: SituationEmploye | 'ACTIF' | 'SORTI' | 'ENTRANT' | 'NOUVEAU' | 'INCONNU' | string;
+  situationOriginale?: string;
   statutRapprochement: StatutRapprochement | StatutLigneP5;
   statut: StatutLigneRegistre;
   anomalies: AnomalieLigne[];
@@ -403,6 +409,7 @@ export interface ResultatImportBaseCnss {
     cni?: string;
     cnss?: string;
     situation?: SituationEmploye;
+    situationOriginale?: string;
   }>;
   modificationsDetectees: Array<{
     salarieId: string;

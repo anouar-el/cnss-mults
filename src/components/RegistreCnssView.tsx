@@ -473,12 +473,16 @@ export const RegistreCnssView: React.FC<RegistreCnssViewProps> = ({
                     <td className="py-3 px-3 text-center">
                       <div className="inline-flex flex-col items-center gap-1">
                         <span
-                          className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                          className={`text-[10px] font-black px-2.5 py-0.5 rounded-full border uppercase ${
                             ligne.situation === 'ACTIF'
-                              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                              : ligne.situation === 'SORTI'
-                              ? 'bg-slate-200 text-slate-800 border-slate-300'
-                              : 'bg-amber-100 text-amber-900 border-amber-300'
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                              : ligne.situation === 'SORTI' || ligne.situation === 'SORTIE' || ligne.situation === 'SO'
+                              ? 'bg-rose-100 text-rose-800 border-rose-300'
+                              : ligne.situation === 'ENTRANT' || ligne.situation === 'NOUVEAU'
+                              ? 'bg-blue-100 text-blue-800 border-blue-300'
+                              : ligne.situation === 'ACCIDENT_TRAVAIL' || ligne.situation === 'AT'
+                              ? 'bg-amber-100 text-amber-900 border-amber-300'
+                              : 'bg-purple-100 text-purple-900 border-purple-300'
                           }`}
                         >
                           {ligne.situation}

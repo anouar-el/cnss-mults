@@ -30,7 +30,7 @@ import {
   CnssTauxItem,
 } from '../types/cnssPaiement';
 import { DossierCnssMensuel } from '../types/cnssDossier';
-import { normaliserNom, extraireTokensTries } from './normalizer';
+import { normaliserNom, extraireTokensTries, normaliserSituation } from './normalizer';
 import { chargerBaseSalariesReelle } from '../data/septembreRealData';
 
 const STORAGE_KEYS = {
@@ -375,11 +375,14 @@ export const persistenceService = {
     nomComplet: string;
     cni?: string;
     immatriculationCnss?: string;
+    situation?: SituationEmploye | string;
+    situationOriginale?: string;
     datePremiereApparition?: string;
   }): { salarie: SalarieReferentiel; estNouveau: boolean; doublonDetecte?: SalarieReferentiel } {
     const salaries = this.getSalaries();
     const nomNormalise = normaliserNom(donnees.nomComplet);
     const tokens = extraireTokensTries(donnees.nomComplet);
+    const sitNorm = donnees.situation ? normaliserSituation(donnees.situation) : 'ACTIF';
 
     const doublon = salaries.find(s => {
       if (s.nomNormalise === nomNormalise) return true;
@@ -389,6 +392,12 @@ export const persistenceService = {
     });
 
     if (doublon) {
+      if (donnees.situation) {
+        doublon.situation = sitNorm;
+        doublon.situationOriginale = donnees.situationOriginale || String(donnees.situation);
+        doublon.actif = sitNorm === 'ACTIF';
+        this.saveSalaries(salaries);
+      }
       return { salarie: doublon, estNouveau: false, doublonDetecte: doublon };
     }
 
@@ -400,7 +409,9 @@ export const persistenceService = {
       tokensNom: tokens,
       cni: donnees.cni?.trim().toUpperCase(),
       immatriculationCnss: donnees.immatriculationCnss?.trim(),
-      situation: 'ACTIF',
+      situation: sitNorm,
+      situationOriginale: donnees.situationOriginale || (donnees.situation ? String(donnees.situation) : undefined),
+      actif: sitNorm === 'ACTIF',
       datePremiereApparition: donnees.datePremiereApparition || new Date().toISOString(),
       aliases: [],
     };

@@ -1,3 +1,5 @@
+import { SituationEmploye } from '../types/cnss';
+
 /**
  * Service de normalisation des noms et identifiants - PROMPT 01
  * Conforme à la règle : la normalisation ne modifie jamais les données originales.
@@ -165,3 +167,104 @@ export function correspondAvecVariantePrefixe(a: string, b: string): boolean {
   const tokensB = extraireTokensTries(normB).join(' ');
   return tokensA === tokensB;
 }
+
+/**
+ * Normalise la situation / statut d'un salarié (Sections 9, 10, 11)
+ * Recopie fidèlement la situation du fichier importé :
+ * - Actif / Active / Présent -> 'ACTIF'
+ * - Sortie / Sorti / SO / Départ -> 'SORTI'
+ * - Entrant / Entrante / Entrée / Nouveau -> 'ENTRANT'
+ * - Accident / AT -> 'ACCIDENT_TRAVAIL'
+ * - Maladie / ML -> 'MALADIE'
+ * - Maternité / MT -> 'CONGE_MATERNITE'
+ * - Conserve fidèlement tout autre libellé spécifique en majuscules (ex: SUSPENDU, STAGIAIRE)
+ */
+export function normaliserSituation(brute?: string | null): SituationEmploye {
+  if (!brute) return 'ACTIF';
+  const clean = String(brute).trim();
+  if (!clean) return 'ACTIF';
+
+  const s = clean.toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  // 1. Sortie / Sortant
+  if (
+    s === 'SO' ||
+    s.startsWith('SORTI') ||
+    s.startsWith('DEPART') ||
+    s.startsWith('DEMISS') ||
+    s.startsWith('QUIT') ||
+    s.startsWith('RADIE')
+  ) {
+    return 'SORTI';
+  }
+
+  // 2. Entrant / Nouveau / Recruté
+  if (
+    s.startsWith('ENTRAN') ||
+    s.startsWith('ENTRE') ||
+    s.startsWith('NOUVEA') ||
+    s.startsWith('EMBAUCH') ||
+    s.startsWith('RECRUT') ||
+    s.startsWith('NOUV')
+  ) {
+    return 'ENTRANT';
+  }
+
+  // 3. Accident de travail
+  if (s === 'AT' || s.includes('ACCIDENT')) {
+    return 'ACCIDENT_TRAVAIL';
+  }
+
+  // 4. Maladie
+  if (s === 'ML' || s.includes('MALADI')) {
+    return 'MALADIE';
+  }
+
+  // 5. Maternité
+  if (s === 'MT' || s.includes('MATERN')) {
+    return 'CONGE_MATERNITE';
+  }
+
+  // 6. Actif / En poste
+  if (
+    s.startsWith('ACTIF') ||
+    s.startsWith('ACTIVE') ||
+    s.startsWith('PRESENT') ||
+    s.startsWith('EN POSTE') ||
+    s.startsWith('REGULIER') ||
+    s === 'ACT'
+  ) {
+    return 'ACTIF';
+  }
+
+  // 7. À vérifier
+  if (s.startsWith('A VERIF') || s.startsWith('A_VERIF')) {
+    return 'A_VERIFIER';
+  }
+
+  // 8. Inactif / Suspendu
+  if (s.startsWith('INACTIF')) return 'INACTIF';
+  if (s.startsWith('SUSPEND')) return 'SUSPENDU';
+
+  // Conserver fidèlement le texte nettoyé en majuscules si statut spécifique
+  return clean.toUpperCase() as SituationEmploye;
+}
+
+/**
+ * Formate un libellé élégant pour l'affichage humain
+ */
+export function formaterLibelleSituation(sit?: string | null): string {
+  if (!sit) return 'Actif';
+  const s = String(sit).trim().toUpperCase();
+  if (s === 'ACTIF') return 'Actif';
+  if (s === 'SORTI' || s === 'SO') return 'Sortie';
+  if (s === 'ENTRANT' || s === 'NOUVEAU') return 'Entrant';
+  if (s === 'ACCIDENT_TRAVAIL' || s === 'AT') return 'Accident de Travail (AT)';
+  if (s === 'MALADIE' || s === 'ML') return 'Maladie (ML)';
+  if (s === 'CONGE_MATERNITE' || s === 'MT') return 'Maternité (MT)';
+  if (s === 'A_VERIFIER' || s === 'À_VÉRIFIER') return 'À vérifier';
+  if (s === 'SUSPENDU') return 'Suspendu';
+  if (s === 'INACTIF') return 'Inactif';
+  return sit;
+}
+

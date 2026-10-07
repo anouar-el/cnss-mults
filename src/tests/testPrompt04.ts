@@ -259,6 +259,32 @@ export function executerTestsPrompt04(): BilanPrompt04 {
     });
   }
 
+  // TEST 11 : Recopie stricte des situations du fichier importé (Actif, Sortie, Entrant)
+  {
+    const enteteTest = ['NOM ET PRENOM', 'CNI', 'CNSS', 'SITUATION'];
+    const lignesTest = [
+      ['SALARIE ACTIF TEST', 'WA111111', '111111111', 'Actif'],
+      ['SALARIE SORTI TEST', 'WA222222', '222222222', 'Sortie'],
+      ['SALARIE ENTRANT TEST', 'WA333333', '333333333', 'Entrant'],
+    ];
+
+    const analyse = excelService.analyserBaseCnss([enteteTest, ...lignesTest], []);
+    const sitActif = analyse.nouveauxSalaries.find(s => s.nomComplet === 'SALARIE ACTIF TEST')?.situation;
+    const sitSorti = analyse.nouveauxSalaries.find(s => s.nomComplet === 'SALARIE SORTI TEST')?.situation;
+    const sitEntrant = analyse.nouveauxSalaries.find(s => s.nomComplet === 'SALARIE ENTRANT TEST')?.situation;
+
+    const succes = sitActif === 'ACTIF' && sitSorti === 'SORTI' && sitEntrant === 'ENTRANT';
+
+    resultats.push({
+      id: 11,
+      cas: 'TEST 11 : Recopie exacte des situations importées (Actif, Sortie, Entrant)',
+      succes,
+      attendu: 'Situations fidèlement recopiées : ACTIF, SORTI, ENTRANT',
+      obtenu: `Actif: ${sitActif} | Sortie: ${sitSorti} | Entrant: ${sitEntrant}`,
+      details: 'Garantit que le tableau ne force pas tout le monde en Actif et recopie fidèlement les situations.',
+    });
+  }
+
   const reussis = resultats.filter(r => r.succes).length;
   const echoues = resultats.length - reussis;
 

@@ -53,9 +53,9 @@ export const SortiesView: React.FC<SortiesViewProps> = ({
   const [filtreStatut, setFiltreStatut] = useState<'TOUTES' | 'A_CONFIRMER' | 'CONFIRMEES' | 'MAINTENUES'>('TOUTES');
   const [salariePourStatutModal, setSalariePourStatutModal] = useState<SalariePourModificationStatut | null>(null);
 
-  // Identifier les cas de salariés notés 'SORTI' en base mais ayant des jours en paie (Section 13 - Marouane Moukrim)
+  // Identifier les cas de salariés notés 'SORTI' en base ou dans le fichier importé mais ayant des jours en paie (Section 13 - Marouane Moukrim)
   const sortisRetravaillant = rapprochements.filter(
-    r => r.salariePropose?.situation === 'SORTI' && (r.validationJours.joursDeclares ?? r.validationJours.joursImportes) > 0
+    r => (r.situationImportee === 'SORTI' || r.salariePropose?.situation === 'SORTI') && (r.validationJours.joursDeclares ?? r.validationJours.joursImportes) > 0
   );
 
   const sortiesFiltrees = sorties.filter(s => {

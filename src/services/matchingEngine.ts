@@ -26,8 +26,29 @@ import {
   scoreSimilariteAvancee,
   extraireTokensTries,
   correspondAvecVariantePrefixe,
+  normaliserSituation,
 } from './normalizer';
 import { persistenceService } from './persistenceService';
+
+/**
+ * Finalise le rapprochement en garantissant la recopie stricte de la situation importée
+ */
+function finaliserRapprochement(res: ResultatRapprochement, ligne: LignePaieImportee): ResultatRapprochement {
+  if (ligne.situationImportee) {
+    const sitNorm = normaliserSituation(ligne.situationImportee);
+    res.situationImportee = sitNorm;
+    if (res.salariePropose) {
+      res.salariePropose = {
+        ...res.salariePropose,
+        situation: sitNorm,
+        situationOriginale: ligne.situationImportee,
+        actif: sitNorm === 'ACTIF',
+      };
+    }
+  }
+  res.statutP5 = determinerStatutLigneP5(res);
+  return res;
+}
 
 /**
  * Détermine le statut strict P5 selon l'état actuel de la ligne
@@ -121,8 +142,7 @@ export function rapprocherLigne(
         enregistrerCommeAlias: false,
         validationJours: validationJoursInitiale,
       };
-      res.statutP5 = determinerStatutLigneP5(res);
-      return res;
+      return finaliserRapprochement(res, ligne);
     }
   }
 
@@ -148,8 +168,7 @@ export function rapprocherLigne(
         enregistrerCommeAlias: false,
         validationJours: validationJoursInitiale,
       };
-      res.statutP5 = determinerStatutLigneP5(res);
-      return res;
+      return finaliserRapprochement(res, ligne);
     }
   }
 
@@ -176,8 +195,7 @@ export function rapprocherLigne(
         enregistrerCommeAlias: false,
         validationJours: validationJoursInitiale,
       };
-      res.statutP5 = determinerStatutLigneP5(res);
-      return res;
+      return finaliserRapprochement(res, ligne);
     }
   }
 
@@ -212,8 +230,7 @@ export function rapprocherLigne(
       enregistrerCommeAlias: false,
       validationJours: validationJoursInitiale,
     };
-    res.statutP5 = determinerStatutLigneP5(res);
-    return res;
+    return finaliserRapprochement(res, ligne);
   }
 
   // Test complémentaire : variantes de préfixes (ex: EL AOUACHY vs ELAOUACHY)
@@ -236,8 +253,7 @@ export function rapprocherLigne(
       enregistrerCommeAlias: true,
       validationJours: validationJoursInitiale,
     };
-    res.statutP5 = determinerStatutLigneP5(res);
-    return res;
+    return finaliserRapprochement(res, ligne);
   }
 
   // =========================================================================
@@ -312,8 +328,7 @@ export function rapprocherLigne(
       enregistrerCommeAlias: false,
       validationJours: validationJoursInitiale,
     };
-    res.statutP5 = determinerStatutLigneP5(res);
-    return res;
+    return finaliserRapprochement(res, ligne);
   }
 
   // Cas 90–99% : Forte correspondance sans ambiguïté (ex: YOUSSEF GHAFOUR vs YOUSSEF GHAFFOUR)
@@ -342,8 +357,7 @@ export function rapprocherLigne(
       })),
       validationJours: validationJoursInitiale,
     };
-    res.statutP5 = determinerStatutLigneP5(res);
-    return res;
+    return finaliserRapprochement(res, ligne);
   }
 
   // Cas 80–89% : Correspondance à vérifier (ex: MOUAAZ EL AATLATI vs MOAEZ ELATLLATI)
@@ -372,8 +386,7 @@ export function rapprocherLigne(
       })),
       validationJours: validationJoursInitiale,
     };
-    res.statutP5 = determinerStatutLigneP5(res);
-    return res;
+    return finaliserRapprochement(res, ligne);
   }
 
   // Cas < 80% : NON_IDENTIFIE / À VÉRIFIER (ex: SAFWAN DAOU)
@@ -403,8 +416,7 @@ export function rapprocherLigne(
     enregistrerCommeAlias: false,
     validationJours: validationJoursInitiale,
   };
-  res.statutP5 = determinerStatutLigneP5(res);
-  return res;
+  return finaliserRapprochement(res, ligne);
 }
 
 /**

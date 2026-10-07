@@ -16,6 +16,7 @@ import {
 } from '../types/cnss';
 import { persistenceService } from './persistenceService';
 import { determinerStatutLigneP5 } from './matchingEngine';
+import { normaliserSituation } from './normalizer';
 
 export class CnssRegisterService {
   /**
@@ -79,8 +80,11 @@ export class CnssRegisterService {
       const salaireBrutImporte = lignePaie.salaireBrut ?? 0;
       const salaireBrutDeclare = existant?.salaireBrutDeclare ?? salaireBrutImporte;
 
-      // 4. Situation
-      const situation = salarieLie?.situation || 'ACTIF';
+      // 4. Situation : priorité absolue à la situation du fichier importé
+      const situationBruteLigne = lignePaie.situationImportee;
+      const situation = situationBruteLigne
+        ? normaliserSituation(situationBruteLigne)
+        : (salarieLie?.situation ? normaliserSituation(salarieLie.situation) : 'ACTIF');
 
       // 5. Statut Rapprochement P5
       const statutRapprochement = rap ? determinerStatutLigneP5(rap) : 'NON_IDENTIFIE';
@@ -172,6 +176,7 @@ export class CnssRegisterService {
         salaireBrutImporte,
         salaireBrutDeclare,
         situation,
+        situationOriginale: lignePaie.situationImportee || salarieLie?.situationOriginale,
         statutRapprochement,
         statut: statutCalcule,
         anomalies: anosLigne,

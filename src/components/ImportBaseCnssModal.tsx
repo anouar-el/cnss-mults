@@ -20,6 +20,7 @@ import { persistenceService } from '../services/persistenceService';
 import {
   SalarieReferentiel,
   ResultatImportBaseCnss,
+  SituationEmploye,
 } from '../types/cnss';
 import { RAW_BASE_CNSS_SEPTEMBRE } from '../data/septembreRealData';
 
@@ -101,20 +102,29 @@ export const ImportBaseCnssModal: React.FC<ImportBaseCnssModalProps> = ({
       if (sal) {
         if (mod.champ === 'CNI') sal.cni = mod.nouvelleValeur;
         if (mod.champ === 'CNSS') sal.immatriculationCnss = mod.nouvelleValeur;
+        if (mod.champ === 'SITUATION') {
+          sal.situation = mod.nouvelleValeur as SituationEmploye;
+          sal.actif = mod.nouvelleValeur === 'ACTIF';
+        }
       }
     });
 
     // 2. Ajouter les nouveaux salariés
     resultatDiff.nouveauxSalaries.forEach(nouveau => {
-      persistenceService.creerNouveauSalarieReferentiel({
+      const res = persistenceService.creerNouveauSalarieReferentiel({
         nomComplet: nouveau.nomComplet,
         cni: nouveau.cni,
         immatriculationCnss: nouveau.cnss,
+        situation: nouveau.situation,
+        situationOriginale: nouveau.situationOriginale,
       });
+      if (res.estNouveau) {
+        baseCopie.push(res.salarie);
+      }
     });
 
-    const baseActualisee = persistenceService.getSalaries();
-    onBaseMiseAJour(baseActualisee);
+    persistenceService.saveSalaries(baseCopie);
+    onBaseMiseAJour(baseCopie);
     onClose();
   };
 
@@ -272,7 +282,19 @@ export const ImportBaseCnssModal: React.FC<ImportBaseCnssModalProps> = ({
                             <td className="py-1.5 px-3 font-semibold text-slate-900">{n.nomComplet}</td>
                             <td className="py-1.5 px-3 font-mono">{n.cni || '-'}</td>
                             <td className="py-1.5 px-3 font-mono font-bold text-emerald-800">{n.cnss || '-'}</td>
-                            <td className="py-1.5 px-3">{n.situation || 'ACTIF'}</td>
+                            <td className="py-1.5 px-3">
+                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                                n.situation === 'ACTIF'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : n.situation === 'SORTI'
+                                  ? 'bg-slate-200 text-slate-800 border-slate-300'
+                                  : n.situation === 'ENTRANT'
+                                  ? 'bg-blue-100 text-blue-800 border-blue-200'
+                                  : 'bg-amber-100 text-amber-900 border-amber-300'
+                              }`}>
+                                {n.situation || 'ACTIF'}
+                              </span>
+                            </td>
                           </tr>
                         ))}
                       </tbody>

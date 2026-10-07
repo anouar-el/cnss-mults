@@ -59,9 +59,13 @@ export const NouveauxView: React.FC<NouveauxViewProps> = ({
     cnss: string;
   } | null>(null);
 
-  // Filtrer les salariés qui sont soit confirmés nouveaux, soit non identifiés (< 80%) en attente
+  // Filtrer les salariés qui sont soit confirmés nouveaux, soit non identifiés (< 80%) en attente, soit avec situation ENTRANT
   const lignesNouveaux = rapprochements.filter(
-    r => r.estMarqueNouveau || r.statut === 'NON_IDENTIFIE'
+    r =>
+      r.estMarqueNouveau ||
+      r.statut === 'NON_IDENTIFIE' ||
+      r.situationImportee === 'ENTRANT' ||
+      r.salariePropose?.situation === 'ENTRANT'
   );
 
   const lignesFiltrees = lignesNouveaux.filter(r => {

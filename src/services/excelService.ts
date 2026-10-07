@@ -18,6 +18,7 @@ import {
   normaliserCni,
   normaliserCnss,
   extraireTokensTries,
+  normaliserSituation,
 } from './normalizer';
 import { persistenceService } from './persistenceService';
 
@@ -143,14 +144,24 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
   ],
   situation: [
     'SITUATION',
+    'SITUATION SALARIE',
+    'SITUATION SALARIÉ',
+    'SITUATION DU SALARIE',
+    'SITUATION DU SALARIÉ',
+    'SITUATION EMPLOYE',
+    'SITUATION EMPLOYÉ',
     'ETAT',
     'ÉTAT',
     'STATUT',
-    'SITUATION EMPLOYE',
+    'STATUT SALARIE',
+    'STATUT DU SALARIE',
+    'POSITION',
+    'MOUVEMENT',
     'OBSERVATION',
     'OBSERVATIONS',
     'REMARQUE',
     'SORTIE',
+    'ENTRANT',
     'ACTIF/SORTI',
     'STATUS',
     'MOTIF',
@@ -231,6 +242,7 @@ export const excelService = {
     const indexColCnss = entetes.findIndex((_, idx) => mappings[idx]?.champCible === 'cnss');
     const indexColBase = entetes.findIndex((_, idx) => mappings[idx]?.champCible === 'salaireBase');
     const indexColBrut = entetes.findIndex((_, idx) => mappings[idx]?.champCible === 'salaireBrut');
+    const indexColSituation = entetes.findIndex((_, idx) => mappings[idx]?.champCible === 'situation');
 
     const lignesDonnees = lignesRaw.slice(indexEntete + 1);
     let lignesIgnoreesTotalCount = 0;
@@ -290,6 +302,7 @@ export const excelService = {
         if (indexColBrut >= 0) itemPrevisu.brut = row[indexColBrut];
         if (indexColCni >= 0) itemPrevisu.cni = row[indexColCni];
         if (indexColCnss >= 0) itemPrevisu.cnss = row[indexColCnss];
+        if (indexColSituation >= 0) itemPrevisu.situation = row[indexColSituation];
         lignesPrevisu.push(itemPrevisu);
       }
     });
@@ -352,7 +365,10 @@ export const excelService = {
       const baseBrut = indexColBase >= 0 && row[indexColBase] !== '' ? Number(row[indexColBase]) : undefined;
       const brutMontant = indexColBrut >= 0 && row[indexColBrut] !== '' ? Number(row[indexColBrut]) : undefined;
 
-      const situationBrute = indexColSituation >= 0 && row[indexColSituation] ? String(row[indexColSituation]).trim() : undefined;
+      const situationBrute = indexColSituation >= 0 && row[indexColSituation] !== undefined && row[indexColSituation] !== null && String(row[indexColSituation]).trim() !== ''
+        ? String(row[indexColSituation]).trim()
+        : undefined;
+      const sitNorm = situationBrute ? normaliserSituation(situationBrute) : undefined;
       const clientBrut = indexColClient >= 0 && row[indexColClient] ? String(row[indexColClient]).trim() : undefined;
 
       resultats.push({
@@ -368,7 +384,7 @@ export const excelService = {
         ligneFichier: rIdx + 2,
         sourceFichier: nomFichier,
         nomFichierSource: nomFichier,
-        situationImportee: situationBrute,
+        situationImportee: sitNorm || situationBrute,
         clientImporte: clientBrut,
       });
     });
@@ -552,9 +568,7 @@ export const excelService = {
         return false;
       });
 
-      let sit: SituationEmploye = 'ACTIF';
-      if (situationBrute === 'so') sit = 'SORTI';
-      else if (situationBrute === 'AT') sit = 'ACCIDENT_TRAVAIL';
+      const sit: SituationEmploye = situationBrute ? normaliserSituation(situationBrute) : 'ACTIF';
 
       if (salarieExistant) {
         salariesExistants++;
@@ -578,12 +592,25 @@ export const excelService = {
             nouvelleValeur: cnssNorm,
           });
         }
+        if (situationBrute) {
+          const ancienneSit = salarieExistant.situation || 'ACTIF';
+          if (normaliserSituation(ancienneSit) !== sit) {
+            modificationsDetectees.push({
+              salarieId: salarieExistant.id,
+              nom: salarieExistant.nomComplet,
+              champ: 'SITUATION',
+              ancienneValeur: ancienneSit,
+              nouvelleValeur: sit,
+            });
+          }
+        }
       } else {
         nouveauxSalaries.push({
           nomComplet: nomBrut,
           cni: cniNorm || undefined,
           cnss: cnssNorm || undefined,
           situation: sit,
+          situationOriginale: situationBrute || undefined,
         });
       }
     });

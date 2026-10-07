@@ -578,15 +578,19 @@ export const RapprochementsView: React.FC<RapprochementsViewProps> = ({
                       <td className="py-3 px-3 text-center">
                         {(() => {
                           const sal = salarie || baseSalaries.find(s => s.id === rap.salarieBaseId);
-                          const sit = sal?.situation || 'ACTIF';
+                          const sit = rap.situationImportee || rap.salariePropose?.situation || sal?.situation || 'ACTIF';
                           return (
                             <div className="inline-flex flex-col items-center gap-1">
                               <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
                                 sit === 'ACTIF'
-                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
-                                  : sit === 'SORTI'
-                                  ? 'bg-slate-200 text-slate-800 border-slate-300'
-                                  : 'bg-amber-100 text-amber-900 border-amber-300'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                                  : sit === 'SORTI' || sit === 'SORTIE' || sit === 'SO'
+                                  ? 'bg-rose-100 text-rose-800 border-rose-300'
+                                  : sit === 'ENTRANT' || sit === 'NOUVEAU'
+                                  ? 'bg-blue-100 text-blue-800 border-blue-300'
+                                  : sit === 'ACCIDENT_TRAVAIL' || sit === 'AT'
+                                  ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                  : 'bg-purple-100 text-purple-900 border-purple-300'
                               }`}>
                                 {sit}
                               </span>
