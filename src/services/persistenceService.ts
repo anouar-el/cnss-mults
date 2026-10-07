@@ -31,6 +31,7 @@ import {
 } from '../types/cnssPaiement';
 import { DossierCnssMensuel } from '../types/cnssDossier';
 import { normaliserNom, extraireTokensTries } from './normalizer';
+import { chargerBaseSalariesReelle } from '../data/septembreRealData';
 
 const STORAGE_KEYS = {
   SALARIES: 'cnss_mults_salaries_p4',
@@ -118,16 +119,16 @@ export const persistenceService = {
       // ignore
     }
 
-    // Période initiale par défaut (Septembre 2026 - Période historique)
+    // Période initiale par défaut (Septembre 2026 - Période vierge à l'étape 1)
     const periodeInitiale: PeriodeMensuelle = {
       idMois: '2026-09',
       libelle: 'Septembre 2026',
       statut: 'BROUILLON',
-      etapeWorkflow: 6, // Rapprochement déjà disponible pour sept
+      etapeWorkflow: 1, // Étape 1 : Importer
       dateCreation: '2026-09-01T08:00:00.000Z',
-      nomFichierPaie: 'calcul_salaire_septembre_mults.csv',
-      lignesPaieCount: 88,
-      salariesDeclaresCount: 77,
+      nomFichierPaie: undefined,
+      lignesPaieCount: 0,
+      salariesDeclaresCount: 0,
     };
     safeSet(STORAGE_KEYS.PERIODES, JSON.stringify([periodeInitiale]));
     return [periodeInitiale];
@@ -766,6 +767,99 @@ export const persistenceService = {
       date: new Date().toISOString(),
     };
     safeSet(`${STORAGE_KEYS.ANOMALIES_RESOLUES_PREFIX}${idMois}`, JSON.stringify(list));
+  },
+
+  /**
+   * Réinitialisation intégrale des données de travail.
+   * Supprime toutes les données (paies, rapprochements, registres, préétablis,
+   * bordereaux, paiements, dossiers, alias, décisions, anomalies)
+   * SAUF la base des salariés de la CNSS (77 salariés de référence).
+   */
+  reinitialiserToutSaufBaseCnss(): { baseSalariesCount: number } {
+    // 1. Conserver ou réinitialiser la base officielle des salariés CNSS
+    let salaries = this.getSalaries();
+    if (!salaries || salaries.length === 0) {
+      salaries = chargerBaseSalariesReelle();
+    }
+    safeSet(STORAGE_KEYS.SALARIES, JSON.stringify(salaries));
+
+    // 2. Réinitialiser la configuration entreprise par défaut
+    safeSet(STORAGE_KEYS.ENTREPRISE_CONFIG, JSON.stringify(CONFIG_ENTREPRISE_DEFAUT));
+
+    // 3. Réinitialiser la période à Septembre 2026 vierge (étape 1, 0 lignes)
+    const periodeInitiale: PeriodeMensuelle = {
+      idMois: '2026-09',
+      libelle: 'Septembre 2026',
+      statut: 'BROUILLON',
+      etapeWorkflow: 1,
+      dateCreation: new Date().toISOString(),
+      nomFichierPaie: undefined,
+      lignesPaieCount: 0,
+      salariesDeclaresCount: 0,
+    };
+    safeSet(STORAGE_KEYS.PERIODES, JSON.stringify([periodeInitiale]));
+    safeSet(STORAGE_KEYS.MOIS_ACTIF, '2026-09');
+
+    // 4. Vider les alias et décisions de sorties et mappings
+    safeSet(STORAGE_KEYS.ALIASES, JSON.stringify([]));
+    safeSet(STORAGE_KEYS.DECISIONS_SORTIES, JSON.stringify({}));
+    safeSet(STORAGE_KEYS.MAPPINGS_COLONNES, JSON.stringify({}));
+
+    // 5. Initialiser un journal d'audit propre
+    const auditInit: EvenementAudit = {
+      id: `audit_reset_${Date.now()}`,
+      date: new Date().toISOString(),
+      action: 'CREATION_SALARIE',
+      salarie: 'Base CNSS MULT.S',
+      nouvelleValeur: `${salaries.length} salariés référentiels`,
+      justification: 'Réinitialisation générale des données — Conservation stricte de la base des salariés de la CNSS',
+    };
+    safeSet(STORAGE_KEYS.JOURNAL_AUDIT, JSON.stringify([auditInit]));
+
+    // 6. Nettoyer toutes les clés dynamiques de paie, raps, registres, bordereaux, préétablis, etc.
+    try {
+      if (typeof window !== 'undefined' && typeof window.localStorage !== 'undefined') {
+        const clesASupprimer: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const k = window.localStorage.key(i);
+          if (
+            k &&
+            k.startsWith('cnss_mults_') &&
+            k !== STORAGE_KEYS.SALARIES &&
+            k !== STORAGE_KEYS.ENTREPRISE_CONFIG &&
+            k !== STORAGE_KEYS.PERIODES &&
+            k !== STORAGE_KEYS.MOIS_ACTIF &&
+            k !== STORAGE_KEYS.ALIASES &&
+            k !== STORAGE_KEYS.DECISIONS_SORTIES &&
+            k !== STORAGE_KEYS.MAPPINGS_COLONNES &&
+            k !== STORAGE_KEYS.JOURNAL_AUDIT
+          ) {
+            clesASupprimer.push(k);
+          }
+        }
+        clesASupprimer.forEach(k => window.localStorage.removeItem(k));
+      }
+    } catch (e) {
+      // ignore
+    }
+
+    for (const k of Array.from(inMemoryStore.keys())) {
+      if (
+        k.startsWith('cnss_mults_') &&
+        k !== STORAGE_KEYS.SALARIES &&
+        k !== STORAGE_KEYS.ENTREPRISE_CONFIG &&
+        k !== STORAGE_KEYS.PERIODES &&
+        k !== STORAGE_KEYS.MOIS_ACTIF &&
+        k !== STORAGE_KEYS.ALIASES &&
+        k !== STORAGE_KEYS.DECISIONS_SORTIES &&
+        k !== STORAGE_KEYS.MAPPINGS_COLONNES &&
+        k !== STORAGE_KEYS.JOURNAL_AUDIT
+      ) {
+        inMemoryStore.delete(k);
+      }
+    }
+
+    return { baseSalariesCount: salaries.length };
   },
 
   clearAll(): void {

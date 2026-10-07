@@ -147,6 +147,7 @@ export default function App() {
   const [isImportBaseCnssOpen, setIsImportBaseCnssOpen] = useState(false);
   const [isImportPreetabliOpen, setIsImportPreetabliOpen] = useState(false);
   const [isMigrationModalOpen, setIsMigrationModalOpen] = useState(false);
+  const [isReinitialiserModalOpen, setIsReinitialiserModalOpen] = useState(false);
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(() => isSupabaseConfigured());
 
   useEffect(() => {
@@ -179,14 +180,10 @@ export default function App() {
     return init;
   });
 
-  // Lignes de paie du mois actif
+  // Lignes de paie du mois actif (vierge au départ si aucune donnée importée)
   const [lignesPaie, setLignesPaie] = useState<LignePaieImportee[]>(() => {
     const saved = persistenceService.getLignesPaiePeriode('2026-09');
-    if (saved && saved.length > 0) return saved;
-    // Données réelles de Septembre par défaut
-    const init = chargerLignesPaieReelles();
-    persistenceService.saveLignesPaiePeriode('2026-09', init);
-    return init;
+    return (saved && saved.length > 0) ? saved : [];
   });
 
   // Rapprochements en cours et alias mémorisés
@@ -215,28 +212,15 @@ export default function App() {
     executerTestsPrompt17().then(setBilanP17).catch(console.error);
   }, []);
 
-  // Registre Mensuel CNSS (PROMPT 06)
+  // Registre Mensuel CNSS (PROMPT 06 - vierge au départ si non construit)
   const [lignesRegistre, setLignesRegistre] = useState<LigneRegistreCnss[]>(() => {
     const saved = persistenceService.getRegistrePeriode('2026-09');
-    if (saved && saved.length > 0) return saved;
-    const lPaie = chargerLignesPaieReelles();
-    const bSal = persistenceService.getSalaries().length > 0 ? persistenceService.getSalaries() : chargerBaseSalariesReelle();
-    const rps = executerRapprochement(lPaie, bSal);
-    const ans = validationEngine.auditer(rps, bSal);
-    const initReg = cnssRegisterService.construireRegistre('2026-09', lPaie, bSal, rps, ans);
-    persistenceService.saveRegistrePeriode('2026-09', initReg);
-    return initReg;
+    return (saved && saved.length > 0) ? saved : [];
   });
 
-  // Fichier Préétabli CNSS & Rapprochement (PROMPT 07-BIS)
+  // Fichier Préétabli CNSS & Rapprochement (PROMPT 07-BIS - vierge au départ)
   const [fichierPreetabli, setFichierPreetabli] = useState<FichierPreetabliCnss | null>(() => {
-    const saved = persistenceService.getFichierPreetabli('2026-09');
-    if (saved) return saved;
-    // Par défaut pour Septembre, charge la fixture de référence officielle pour test et exploration
-    const fixture = cnssPreetabliService.genererFixturePreetabliReference('2026-09');
-    const init = cnssPreetabliService.importerEtAnalyserFichierBrut('DS_7891234_202609_PREETABLI_REF.txt', fixture, true);
-    persistenceService.saveFichierPreetabli('2026-09', init);
-    return init;
+    return persistenceService.getFichierPreetabli('2026-09') || null;
   });
 
   const [decisionsPreetabli, setDecisionsPreetabli] = useState<Record<string, DecisionHumainePreetabli>>(() =>
@@ -283,7 +267,7 @@ export default function App() {
     // Charger les lignes de paie de la période cible
     const lignesMois = persistenceService.getLignesPaiePeriode(nouveauMois);
     let rapsMois: ResultatRapprochement[] = [];
-    if (lignesMois) {
+    if (lignesMois && lignesMois.length > 0) {
       setLignesPaie(lignesMois);
       // Vérifier d'abord les rapprochements sauvegardés (Supabase / cache)
       const rapsSauves = persistenceService.getRapprochementsPeriode(nouveauMois);
@@ -295,21 +279,7 @@ export default function App() {
         supabasePersistenceService.saveRapprochementsPeriode(nouveauMois, rapsMois).catch(() => {});
       }
       setRapprochements(rapsMois);
-    } else if (nouveauMois === '2026-09') {
-      const init = chargerLignesPaieReelles();
-      persistenceService.saveLignesPaiePeriode('2026-09', init);
-      setLignesPaie(init);
-      const rapsSauves = persistenceService.getRapprochementsPeriode('2026-09');
-      if (rapsSauves && rapsSauves.length > 0) {
-        rapsMois = rapsSauves;
-      } else {
-        rapsMois = executerRapprochement(init, baseSalaries);
-        persistenceService.saveRapprochementsPeriode('2026-09', rapsMois);
-        supabasePersistenceService.saveRapprochementsPeriode('2026-09', rapsMois).catch(() => {});
-      }
-      setRapprochements(rapsMois);
     } else {
-      // Nouvelle période sans lignes de paie copiées (Section 17)
       setLignesPaie([]);
       setRapprochements([]);
     }
@@ -318,17 +288,19 @@ export default function App() {
     const regSauve = persistenceService.getRegistrePeriode(nouveauMois);
     if (regSauve && regSauve.length > 0) {
       setLignesRegistre(regSauve);
-    } else {
+    } else if (lignesMois && lignesMois.length > 0) {
       const ans = validationEngine.auditer(rapsMois, baseSalaries);
       const nouveauReg = cnssRegisterService.construireRegistre(
         nouveauMois,
-        lignesMois || [],
+        lignesMois,
         baseSalaries,
         rapsMois,
         ans
       );
       setLignesRegistre(nouveauReg);
       persistenceService.saveRegistrePeriode(nouveauMois, nouveauReg);
+    } else {
+      setLignesRegistre([]);
     }
 
     // Charger ou synchroniser le préétabli de la période cible (PROMPT 07-BIS)
@@ -1149,6 +1121,34 @@ export default function App() {
     afficherNotification(`Période ${periodeCourante.libelle} réouverte.`);
   };
 
+  // Réinitialisation complète à zéro en conservant la base des salariés CNSS
+  const handleConfirmerReinitialisation = async () => {
+    try {
+      const resLocal = persistenceService.reinitialiserToutSaufBaseCnss();
+      await supabasePersistenceService.reinitialiserToutSaufBaseCnss();
+
+      const bSal = persistenceService.getSalaries();
+      setBaseSalaries(bSal);
+      setLignesPaie([]);
+      setRapprochements([]);
+      setLignesRegistre([]);
+      setFichierPreetabli(null);
+      setDecisionsPreetabli({});
+      setRapprochementsPreetabli([]);
+      setAliases([]);
+      setDecisionsSorties({});
+      setAnomaliesResoluesManuellement({});
+      setPeriodes(persistenceService.getPeriodes());
+      setMoisActif('2026-09');
+      setResumeImport(null);
+      setVueActive('RAPPROCHEMENT');
+      setIsReinitialiserModalOpen(false);
+      afficherNotification(`✓ Données réinitialisées avec succès. Base CNSS (${resLocal.baseSalariesCount} salariés) conservée.`);
+    } catch (err) {
+      afficherNotification('Erreur lors de la réinitialisation des données.');
+    }
+  };
+
   // -------------------------------------------------------------------------
   // HANDLERS REGISTRE CNSS MENSUEL (PROMPT 06)
   // -------------------------------------------------------------------------
@@ -1373,6 +1373,15 @@ export default function App() {
             >
               <Upload className="w-3.5 h-3.5" />
               <span>Importer Paie</span>
+            </button>
+
+            <button
+              onClick={() => setIsReinitialiserModalOpen(true)}
+              className="inline-flex items-center gap-1 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
+              title="Repartir de 0 : supprimer toutes les données de paie et déclarations en conservant la base des salariés CNSS"
+            >
+              <RotateCcw className="w-3.5 h-3.5 text-rose-600" />
+              <span>Repartir de 0</span>
             </button>
 
             <button
@@ -3276,6 +3285,62 @@ export default function App() {
         onClose={() => setIsMigrationModalOpen(false)}
         onNotification={afficherNotification}
       />
+
+      {/* MODALE DE RÉINITIALISATION À ZÉRO (CONSERVATION STRICTE BASE SALARIÉS CNSS) */}
+      {isReinitialiserModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl max-w-lg w-full border border-slate-200 shadow-2xl p-6 space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-rose-100 text-rose-700">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">
+                  Repartir de 0 (Remise à zéro des données)
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Réinitialisation des données de paie et déclarations
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200 text-slate-700">
+              <p className="font-semibold text-slate-800">
+                Cette opération va effacer les éléments de travail suivants :
+              </p>
+              <ul className="list-disc pl-5 space-y-1 text-slate-600">
+                <li>Lignes de paie importées et rapprochements</li>
+                <li>Registres mensuels CNSS et fichiers préétablis</li>
+                <li>Bordereaux de déclaration et ordres de paiement</li>
+                <li>Alias mémorisés et décisions de sorties temporaires</li>
+                <li>Réinitialisation du workflow à l'Étape 1 (Import Paie)</li>
+              </ul>
+              <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-900 font-bold flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 shrink-0 text-emerald-600" />
+                <span>La base des salariés de la CNSS ({baseSalaries.length} salariés référentiels avec CNI et N° CNSS) sera STRICTEMENT CONSERVÉE.</span>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setIsReinitialiserModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmerReinitialisation}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-md transition-colors cursor-pointer inline-flex items-center gap-1.5"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Confirmer et repartir de 0</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* FOOTER */}
       <footer className="bg-white border-t border-slate-200 py-3 text-center text-xs text-slate-500">

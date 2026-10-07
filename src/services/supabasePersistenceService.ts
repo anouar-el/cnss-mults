@@ -1057,6 +1057,67 @@ class SupabasePersistenceService {
   }
 
   /**
+   * Réinitialisation intégrale des données Supabase (miroir et distant si connecté).
+   * Supprime toutes les données SAUF la table employees (base des salariés CNSS).
+   */
+  async reinitialiserToutSaufBaseCnss(): Promise<{ baseSalariesCount: number }> {
+    // 1. Garantir que les salariés de référence sont préservés
+    if (this.tables.employees.size === 0) {
+      try {
+        const init = chargerBaseSalariesReelle();
+        init.forEach(s => this.tables.employees.set(s.id, { ...s }));
+      } catch {
+        // ignore
+      }
+    }
+
+    // 2. Vider les autres tables miroir
+    this.tables.employee_aliases.clear();
+    this.tables.periods.clear();
+    const periodeInitiale: PeriodeMensuelle = {
+      idMois: '2026-09',
+      libelle: 'Septembre 2026',
+      statut: 'BROUILLON',
+      etapeWorkflow: 1,
+      dateCreation: new Date().toISOString(),
+      nomFichierPaie: undefined,
+      lignesPaieCount: 0,
+      salariesDeclaresCount: 0,
+    };
+    this.tables.periods.set('2026-09', periodeInitiale);
+
+    this.tables.payroll_lines.clear();
+    this.tables.reconciliations.clear();
+    this.tables.cnss_register_lines.clear();
+    this.tables.bordereaux.clear();
+    this.tables.payments.clear();
+    this.tables.monthly_dossiers.clear();
+    this.tables.audit_logs.clear();
+    this.tables.preetablis.clear();
+    this.tables.anomalies_resolues.clear();
+
+    // 3. Si Supabase distant configuré, tenter le nettoyage sans erreur fatale
+    if (isSupabaseConfigured()) {
+      try {
+        await Promise.allSettled([
+          supabase.from('payroll_lines').delete().eq('company_id', this.companyId),
+          supabase.from('reconciliations').delete().eq('company_id', this.companyId),
+          supabase.from('cnss_register_lines').delete().eq('company_id', this.companyId),
+          supabase.from('bordereaux').delete().eq('company_id', this.companyId),
+          supabase.from('payments').delete().eq('company_id', this.companyId),
+          supabase.from('monthly_dossiers').delete().eq('company_id', this.companyId),
+          supabase.from('audit_logs').delete().eq('company_id', this.companyId),
+          supabase.from('employee_aliases').delete().eq('company_id', this.companyId),
+        ]);
+      } catch {
+        // non bloquant
+      }
+    }
+
+    return { baseSalariesCount: this.tables.employees.size };
+  }
+
+  /**
    * Réinitialisation de test (pour environnements de test / rollback)
    */
   clearAllData(): void {
