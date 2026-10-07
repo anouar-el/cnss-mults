@@ -255,7 +255,7 @@ class SupabasePersistenceService {
     });
 
     if (this.simulerErreurSupabase) {
-      console.error('[SUPABASE-SYNC] erreur UPDATE', {
+      console.warn('[SUPABASE-SYNC] simulation test erreur UPDATE', {
         table: 'employees',
         id: salarieId,
         cause: 'Erreur Supabase simulée',
@@ -282,8 +282,10 @@ class SupabasePersistenceService {
           .eq('business_id', salarieId);
 
         if (error) {
-          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
-          if (error.code !== 'PGRST205') {
+          if (error.code === 'PGRST205') {
+            console.warn('[SUPABASE-SYNC] Table Supabase employees non présente dans le cache de schéma (PGRST205) - conservation miroir persistant');
+          } else {
+            console.error('[SUPABASE-SYNC] erreur UPDATE', error);
             throw new Error(`[SUPABASE-SYNC] Erreur Supabase (${error.code || 'UNKNOWN'}) : ${error.message}`);
           }
         } else {
@@ -299,7 +301,7 @@ class SupabasePersistenceService {
         if (err.message?.includes('[SUPABASE-SYNC]')) {
           throw err;
         }
-        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+        console.warn('[SUPABASE-SYNC] exception UPDATE réseau / client Supabase', err);
       }
     }
 
@@ -374,7 +376,7 @@ class SupabasePersistenceService {
     this.tables.employees.set(salarie.id, { ...salarie });
 
     if (this.simulerErreurSupabase) {
-      console.error('[SUPABASE-SYNC] erreur UPDATE', { table: 'employees', id: salarie.id, cause: 'Simulation erreur' });
+      console.warn('[SUPABASE-SYNC] simulation test erreur UPDATE', { table: 'employees', id: salarie.id, cause: 'Simulation erreur' });
       throw new Error('[SUPABASE-SYNC] Erreur simulée lors de l\'UPDATE du salarié');
     }
 
@@ -401,12 +403,16 @@ class SupabasePersistenceService {
         }, { onConflict: 'company_id,business_id' });
 
         if (error) {
-          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
+          if (error.code === 'PGRST205') {
+            console.warn('[SUPABASE-SYNC] Table Supabase employees non provisionnée (PGRST205) - conservation en miroir', { table: 'employees' });
+          } else {
+            console.error('[SUPABASE-SYNC] erreur UPDATE', error);
+          }
         } else {
           console.log('[SUPABASE-SYNC] résultat UPDATE', { table: 'employees', id: salarie.id, success: true, data });
         }
       } catch (err) {
-        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+        console.warn('[SUPABASE-SYNC] exception UPDATE réseau / client Supabase', err);
       }
     }
   }
@@ -726,7 +732,7 @@ class SupabasePersistenceService {
 
   async saveRapprochementsPeriode(monthId: string, lines: ResultatRapprochement[]): Promise<void> {
     if (this.simulerErreurSupabase) {
-      console.error('[SUPABASE-SYNC] erreur UPDATE', {
+      console.warn('[SUPABASE-SYNC] simulation test erreur UPDATE', {
         period_id: monthId,
         count: lines.length,
         cause: 'Erreur Supabase simulée',
@@ -776,8 +782,10 @@ class SupabasePersistenceService {
           .upsert(rows, { onConflict: 'period_id,payroll_line_id' });
 
         if (error) {
-          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
-          if (error.code !== 'PGRST205') {
+          if (error.code === 'PGRST205') {
+            console.warn('[SUPABASE-SYNC] Table Supabase reconciliations non présente dans le cache de schéma (PGRST205) - conservation miroir persistant');
+          } else {
+            console.error('[SUPABASE-SYNC] erreur UPDATE', error);
             throw new Error(`[SUPABASE-SYNC] Erreur Supabase (${error.code || 'UNKNOWN'}) : ${error.message}`);
           }
         } else {
@@ -787,7 +795,7 @@ class SupabasePersistenceService {
         if (err.message?.includes('[SUPABASE-SYNC]')) {
           throw err;
         }
-        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+        console.warn('[SUPABASE-SYNC] exception UPDATE réseau / client Supabase', err);
       }
     }
 
@@ -869,7 +877,7 @@ class SupabasePersistenceService {
     });
 
     if (this.simulerErreurSupabase) {
-      console.error('[SUPABASE-SYNC] erreur UPDATE', {
+      console.warn('[SUPABASE-SYNC] simulation test erreur UPDATE', {
         reconciliation_id: idRapprochement,
         cause: 'Erreur Supabase simulée',
       });
@@ -908,8 +916,10 @@ class SupabasePersistenceService {
           .upsert(payload, { onConflict: 'period_id,payroll_line_id' });
 
         if (error) {
-          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
-          if (error.code !== 'PGRST205') {
+          if (error.code === 'PGRST205') {
+            console.warn('[SUPABASE-SYNC] Table Supabase reconciliations non présente dans le cache de schéma (PGRST205) - conservation miroir persistant');
+          } else {
+            console.error('[SUPABASE-SYNC] erreur UPDATE', error);
             throw new Error(`[SUPABASE-SYNC] Erreur Supabase (${error.code || 'UNKNOWN'}) : ${error.message}`);
           }
         } else {
@@ -919,7 +929,7 @@ class SupabasePersistenceService {
         if (err.message?.includes('[SUPABASE-SYNC]')) {
           throw err;
         }
-        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+        console.warn('[SUPABASE-SYNC] exception UPDATE réseau / client Supabase', err);
       }
     }
 
