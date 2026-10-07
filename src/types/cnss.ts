@@ -49,6 +49,8 @@ export interface LignePaieImportee {
   ligneFichier?: number;
   sourceFichier?: string;
   nomFichierSource?: string;
+  situationImportee?: string;
+  clientImporte?: string;
 }
 
 export interface ValidationJours {

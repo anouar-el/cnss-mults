@@ -12,6 +12,10 @@ import {
   HelpCircle,
   FileCheck2,
   Sparkles,
+  Download,
+  ClipboardPaste,
+  FileText,
+  Info,
 } from 'lucide-react';
 import { excelService } from '../services/excelService';
 import { persistenceService } from '../services/persistenceService';
@@ -41,9 +45,51 @@ export const ImportPaieModal: React.FC<ImportPaieModalProps> = ({
   const [erreur, setErreur] = useState<string | null>(null);
   const [estEnDrag, setEstEnDrag] = useState(false);
   const [alerteDoubleImport, setAlerteDoubleImport] = useState(false);
+  const [modeSaisie, setModeSaisie] = useState<'FICHIER' | 'COLLER'>('FICHIER');
+  const [texteColle, setTexteColle] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
+
+  const telechargerFichier = (data: Uint8Array | string, nomFichier: string, mime: string) => {
+    const blob = new Blob([data as any], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = nomFichier;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleTelechargerModeleExcel = () => {
+    try {
+      const salaries = persistenceService.getSalaries();
+      const bytes = excelService.genererModeleExcel(salaries);
+      telechargerFichier(
+        bytes,
+        `modele_liste_paie_${idMois}.xlsx`,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      );
+    } catch (e: any) {
+      setErreur(`Erreur lors de la génération du modèle Excel: ${e.message}`);
+    }
+  };
+
+  const handleTelechargerModeleCsv = () => {
+    try {
+      const salaries = persistenceService.getSalaries();
+      const csv = excelService.genererModeleCsv(salaries);
+      telechargerFichier(
+        csv,
+        `modele_liste_paie_${idMois}.csv`,
+        'text/csv;charset=utf-8;'
+      );
+    } catch (e: any) {
+      setErreur(`Erreur lors de la génération du modèle CSV: ${e.message}`);
+    }
+  };
 
   // Traitement d'un fichier réel déposé ou sélectionné
   const traiterFichier = (file: File) => {
@@ -79,6 +125,29 @@ export const ImportPaieModal: React.FC<ImportPaieModalProps> = ({
       }
     };
     reader.readAsArrayBuffer(file);
+  };
+
+  // Traitement direct du texte copié-collé depuis Excel ou tableur
+  const traiterTexteColle = () => {
+    if (!texteColle.trim()) {
+      setErreur('Veuillez coller le contenu de votre tableau ou liste avant d\'analyser.');
+      return;
+    }
+    setErreur(null);
+    setAlerteDoubleImport(false);
+    try {
+      const analyse = excelService.analyserTexteColle(
+        texteColle,
+        `liste_paie_${idMois}_collee.csv`
+      );
+      if (analyse.totalLignesDetectees === 0) {
+        setErreur('Aucune ligne de salarié détectée dans le texte collé. Vérifiez la présence des colonnes (ex: Nom et Jours).');
+        return;
+      }
+      setFichierAnalyse(analyse);
+    } catch (err: any) {
+      setErreur(`Erreur lors du traitement du texte collé : ${err.message || 'Format non reconnu'}`);
+    }
   };
 
   // Chargement rapide du jeu de données réel de Septembre (88 salariés + 1 total)
@@ -226,58 +295,194 @@ export const ImportPaieModal: React.FC<ImportPaieModalProps> = ({
             </div>
           )}
 
-          {/* ZONE DE GLISSER-DÉPOSER / SÉLECTION */}
+          {/* SÉLECTEUR DE MODE DE SAISIE ET ZONE D'IMPORTATION */}
           {!fichierAnalyse && (
-            <div className="space-y-4">
-              <div
-                onDragOver={(e) => { e.preventDefault(); setEstEnDrag(true); }}
-                onDragLeave={() => setEstEnDrag(false)}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setEstEnDrag(false);
-                  if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-                    traiterFichier(e.dataTransfer.files[0]);
-                  }
-                }}
-                onClick={() => fileInputRef.current?.click()}
-                className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
-                  estEnDrag
-                    ? 'border-emerald-500 bg-emerald-50/50'
-                    : 'border-slate-300 hover:border-emerald-400 bg-slate-50/50 hover:bg-emerald-50/20'
-                }`}
-              >
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  className="hidden"
-                  onChange={(e) => {
-                    if (e.target.files && e.target.files[0]) {
-                      traiterFichier(e.target.files[0]);
-                    }
-                  }}
-                />
-                <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-3">
-                  <FileSpreadsheet className="w-7 h-7" />
-                </div>
-                <h3 className="text-sm font-bold text-slate-800">
-                  Cliquez pour sélectionner ou glissez-déposez le fichier de paie
-                </h3>
-                <p className="text-xs text-slate-500 mt-1">
-                  Compatible avec Excel (.xlsx, .xls) et CSV (.csv) &bull; Détection intelligente des colonnes
-                </p>
-              </div>
-
-              {/* Bouton de test rapide avec les données réelles de Septembre */}
-              <div className="text-center pt-2">
+            <div className="space-y-5">
+              {/* Onglets de mode : Fichier vs Copier-Coller */}
+              <div className="flex items-center gap-2 border-b border-slate-200 pb-2">
                 <button
                   type="button"
-                  onClick={chargerDemoSeptembre}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold border border-slate-300 transition-colors cursor-pointer"
+                  onClick={() => setModeSaisie('FICHIER')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    modeSaisie === 'FICHIER'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                  <span>Charger le fichier réel : calcul_salaire_septembre_mults.csv (88 salariés)</span>
+                  <FileSpreadsheet className="w-4 h-4" />
+                  <span>Importer un Fichier (.xlsx, .xls, .csv)</span>
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setModeSaisie('COLLER')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                    modeSaisie === 'COLLER'
+                      ? 'bg-emerald-600 text-white shadow-xs'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  <ClipboardPaste className="w-4 h-4" />
+                  <span>Copier-Coller le Tableau / la Liste</span>
+                </button>
+              </div>
+
+              {/* MODE 1 : Glisser-déposer / Parcourir fichier */}
+              {modeSaisie === 'FICHIER' && (
+                <div
+                  onDragOver={(e) => { e.preventDefault(); setEstEnDrag(true); }}
+                  onDragLeave={() => setEstEnDrag(false)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setEstEnDrag(false);
+                    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                      traiterFichier(e.dataTransfer.files[0]);
+                    }
+                  }}
+                  onClick={() => fileInputRef.current?.click()}
+                  className={`border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all ${
+                    estEnDrag
+                      ? 'border-emerald-500 bg-emerald-50/50'
+                      : 'border-slate-300 hover:border-emerald-400 bg-slate-50/50 hover:bg-emerald-50/20'
+                  }`}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      if (e.target.files && e.target.files[0]) {
+                        traiterFichier(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mb-3">
+                    <FileSpreadsheet className="w-7 h-7" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-800">
+                    Cliquez pour sélectionner ou glissez-déposez le fichier de paie
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Compatible avec Excel (.xlsx, .xls) et CSV (.csv) &bull; Détection intelligente multi-colonnes
+                  </p>
+                </div>
+              )}
+
+              {/* MODE 2 : Copier-coller direct de données tabulées */}
+              {modeSaisie === 'COLLER' && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-2">
+                    <Info className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+                    <div>
+                      <strong>Astuce :</strong> Sélectionnez vos lignes dans Excel (avec ou sans en-tête), faites <kbd className="px-1.5 py-0.5 bg-white border rounded font-mono text-[10px]">Ctrl+C</kbd> puis collez directement ci-dessous avec <kbd className="px-1.5 py-0.5 bg-white border rounded font-mono text-[10px]">Ctrl+V</kbd>.
+                    </div>
+                  </div>
+
+                  <textarea
+                    rows={7}
+                    value={texteColle}
+                    onChange={(e) => setTexteColle(e.target.value)}
+                    placeholder={`Collez vos colonnes ici depuis Excel ou Google Sheets...\nExemple :\nNOM ET PRENOM\tJRS OUVRE\tBASE\tBRUT\nACHRAF ABIDY\t25\t3190\t3067.31\nBOUABID EL BACHRI\t19\t3190\t2331.15`}
+                    className="w-full p-3 font-mono text-xs border border-slate-300 rounded-xl focus:border-emerald-500 focus:ring-2 focus:ring-emerald-200 focus:outline-hidden bg-slate-50/60"
+                  />
+
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={traiterTexteColle}
+                      disabled={!texteColle.trim()}
+                      className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer shadow-xs"
+                    >
+                      <ClipboardPaste className="w-4 h-4" />
+                      <span>Analyser le tableau collé</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* OUTILS ET MODÈLES DE LA LISTE MENSUELLE */}
+              <div className="pt-2 border-t border-slate-200 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Modèles officiels MULT.S & Démo
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleTelechargerModeleExcel}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold border border-slate-300 transition-colors cursor-pointer"
+                      title="Télécharger le modèle Excel pré-rempli avec les 77 salariés CNSS"
+                    >
+                      <Download className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Modèle Excel (.xlsx) pré-rempli</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={handleTelechargerModeleCsv}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-semibold border border-slate-300 transition-colors cursor-pointer"
+                      title="Télécharger le modèle CSV"
+                    >
+                      <Download className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Modèle CSV (.csv)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={chargerDemoSeptembre}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 rounded-xl text-xs font-bold border border-emerald-300 transition-colors cursor-pointer"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Charger la liste réelle (88 salariés)</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* GUIDE VISUEL DES COLONNES DE LA LISTE MENSUELLE */}
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                    <FileText className="w-4 h-4 text-emerald-600" />
+                    <span>Structure acceptée pour votre liste mensuelle de paie</span>
+                  </div>
+                  <p className="text-[11px] text-slate-600">
+                    Le moteur détecte automatiquement vos colonnes sans imposer d'ordre précis. Les lignes récapitulatives de type <strong>TOTAL</strong> ou <strong>SOMME</strong> sont automatiquement isolées.
+                  </p>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 text-[11px]">
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-bold text-emerald-700 block">NOM ET PRENOM *</span>
+                      <span className="text-[10px] text-slate-500">Nom complet du salarié</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-bold text-emerald-700 block">JRS OUVRE *</span>
+                      <span className="text-[10px] text-slate-500">Jours travaillés (0 à 26)</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-bold text-emerald-700 block">BASE *</span>
+                      <span className="text-[10px] text-slate-500">Salaire de base</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-bold text-emerald-700 block">BRUT *</span>
+                      <span className="text-[10px] text-slate-500">Salaire brut déclaré</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-medium text-slate-700 block">CNI (optionnel)</span>
+                      <span className="text-[10px] text-slate-500">Carte nationale identité</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-medium text-slate-700 block">CNSS (optionnel)</span>
+                      <span className="text-[10px] text-slate-500">N° immatriculation</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-medium text-slate-700 block">SITUATION (optionnel)</span>
+                      <span className="text-[10px] text-slate-500">ACTIF, SORTI ou AT</span>
+                    </div>
+                    <div className="p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="font-medium text-slate-700 block">CLIENT (optionnel)</span>
+                      <span className="text-[10px] text-slate-500">Chantier / affectation</span>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}
@@ -386,6 +591,7 @@ export const ImportPaieModal: React.FC<ImportPaieModalProps> = ({
                               <option value="salaireBrut">Salaire brut</option>
                               <option value="cni">CNI</option>
                               <option value="cnss">Immatriculation CNSS</option>
+                              <option value="situation">Situation / Statut (ACTIF, SORTI, AT)</option>
                               <option value="client">Client / Chantier</option>
                               <option value="ignorer">Ignorer cette colonne</option>
                             </select>

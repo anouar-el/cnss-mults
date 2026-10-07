@@ -30,6 +30,10 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'NOM & PRÉNOM',
     'NOM COMPLET',
     'NOM',
+    'PRENOM',
+    'PRÉNOM',
+    'NOM PRENOM',
+    'NOM ET PRENOM DU SALARIE',
     'SALARIE',
     'SALARIÉ',
     'EMPLOYE',
@@ -37,8 +41,14 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'AGENT',
     'INTERIMAIRE',
     'INTÉRIMAIRE',
-    'NOM PRENOM',
-    'NOM ET PRENOM DU SALARIE',
+    'COLLABORATEUR',
+    'PERSONNEL',
+    'BENEFICIAIRE',
+    'BÉNÉFICIAIRE',
+    'INTITULE',
+    'FULL NAME',
+    'NAME',
+    'NOM SALARIE',
   ],
   joursTravailles: [
     'JRS OUVRE',
@@ -55,6 +65,16 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'JRS',
     'JOURS OUVRES',
     'TOTAL JOURS',
+    'POINTAGE',
+    'PRESENCE',
+    'JOURS PRESENCE',
+    'J_TRAV',
+    'JOURS PAYES',
+    'JRS TRAVAILLES',
+    'NBRE DE JOURS TRAVAILLES',
+    'DAYS',
+    'WORKED DAYS',
+    'JRS_TRAV',
   ],
   salaireBase: [
     'BASE',
@@ -62,6 +82,13 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'SALAIRE DE BASE',
     'SAL. BASE',
     'SAL BASE',
+    'SALAIRE_BASE',
+    'SB',
+    'TX BASE',
+    'SALAIRE HORAIRE',
+    'BASE MENSUELLE',
+    'BASIC SALARY',
+    'SALAIRE MENSUEL',
   ],
   salaireBrut: [
     'BRUT',
@@ -70,6 +97,15 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'BRUT GLOBAL',
     'SALAIRE GLOBAL',
     'TOTAL BRUT',
+    'BRUT IMPOSABLE',
+    'SALAIRE_BRUT',
+    'REMUNERATION',
+    'REMUNERATION BRUTE',
+    'TOTAL REMUNERATION',
+    'MONTANT BRUT',
+    'GROSS',
+    'GROSS SALARY',
+    'BRUT TOTAL',
   ],
   cni: [
     'CNI',
@@ -78,7 +114,15 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'N° CIN',
     'CARTE NATIONALE',
     'C.N.I',
+    'C.I.N',
     'NUMERO CNI',
+    'NUM CIN',
+    'NUMERO CIN',
+    'N° DE CNI',
+    'ID',
+    'ID NATIONALE',
+    'NATIONAL ID',
+    'CIN/CNI',
   ],
   cnss: [
     'N° IMMATRICULE',
@@ -90,6 +134,12 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'NUMERO CNSS',
     'MATRICULE CNSS',
     'IMMAT',
+    'N° AFFILIATION',
+    'AFFILIATION CNSS',
+    'NUM CNSS',
+    'CODE CNSS',
+    'N° IMMAT',
+    'IMMAT CNSS',
   ],
   situation: [
     'SITUATION',
@@ -98,6 +148,12 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'STATUT',
     'SITUATION EMPLOYE',
     'OBSERVATION',
+    'OBSERVATIONS',
+    'REMARQUE',
+    'SORTIE',
+    'ACTIF/SORTI',
+    'STATUS',
+    'MOTIF',
   ],
   client: [
     'CLIENT',
@@ -106,6 +162,9 @@ const DICTIONNAIRE_ENTETES: Record<ChampMappeType, string[]> = {
     'SOCIETE CLIENTE',
     'MISSION',
     'ENTREPRISE',
+    'SITE',
+    'AFFECTATION CLIENT',
+    'POSTE',
   ],
   ignorer: [],
 };
@@ -271,6 +330,8 @@ export const excelService = {
     const indexColCnss = entetesDetectees.findIndex((_, idx) => mappings[idx]?.champCible === 'cnss');
     const indexColBase = entetesDetectees.findIndex((_, idx) => mappings[idx]?.champCible === 'salaireBase');
     const indexColBrut = entetesDetectees.findIndex((_, idx) => mappings[idx]?.champCible === 'salaireBrut');
+    const indexColSituation = entetesDetectees.findIndex((_, idx) => mappings[idx]?.champCible === 'situation');
+    const indexColClient = entetesDetectees.findIndex((_, idx) => mappings[idx]?.champCible === 'client');
 
     const resultats: LignePaieImportee[] = [];
     let sequence = 1;
@@ -291,6 +352,9 @@ export const excelService = {
       const baseBrut = indexColBase >= 0 && row[indexColBase] !== '' ? Number(row[indexColBase]) : undefined;
       const brutMontant = indexColBrut >= 0 && row[indexColBrut] !== '' ? Number(row[indexColBrut]) : undefined;
 
+      const situationBrute = indexColSituation >= 0 && row[indexColSituation] ? String(row[indexColSituation]).trim() : undefined;
+      const clientBrut = indexColClient >= 0 && row[indexColClient] ? String(row[indexColClient]).trim() : undefined;
+
       resultats.push({
         id: `paie_${idMois.replace('-', '')}_${sequence++}`,
         nomCompletBrut: nomBrut, // Valeur originale
@@ -302,10 +366,104 @@ export const excelService = {
         salaireBase: isNaN(Number(baseBrut)) ? undefined : baseBrut,
         salaireBrut: isNaN(Number(brutMontant)) ? undefined : brutMontant,
         ligneFichier: rIdx + 2,
+        sourceFichier: nomFichier,
+        nomFichierSource: nomFichier,
+        situationImportee: situationBrute,
+        clientImporte: clientBrut,
       });
     });
 
     return resultats;
+  },
+
+  /**
+   * Analyse directement un texte copié-collé (ex: depuis un tableau Excel ou Google Sheets)
+   */
+  analyserTexteColle(
+    texte: string,
+    nomFichier = 'liste_paie_collee.csv'
+  ): AnalyseFichierExcel {
+    const texteNettoye = texte.trim();
+    if (!texteNettoye) {
+      throw new Error('Le texte collé est vide.');
+    }
+
+    return this.analyserBufferOuClasseur(
+      texteNettoye,
+      nomFichier,
+      texteNettoye.length,
+      new Date().toISOString()
+    );
+  },
+
+  /**
+   * Génère un modèle de fichier Excel (.xlsx) prêt à l'emploi pour la liste mensuelle.
+   * Peut être pré-rempli avec la base de référence des salariés CNSS pour accélérer la saisie.
+   */
+  genererModeleExcel(baseSalaries?: SalarieReferentiel[]): Uint8Array {
+    const lignes: Record<string, any>[] = [];
+
+    if (baseSalaries && baseSalaries.length > 0) {
+      baseSalaries.forEach(s => {
+        const estSorti = s.situation === 'SORTI';
+        lignes.push({
+          'NOM ET PRENOM': s.nomComplet,
+          'JRS OUVRE': estSorti ? 0 : 26,
+          'BASE': 3190.0,
+          'BRUT': estSorti ? 0.0 : 3190.0,
+          'CNI': s.cni || '',
+          'CNSS': s.immatriculationCnss || '',
+          'SITUATION': s.situation || 'ACTIF',
+        });
+      });
+    } else {
+      // Exemples représentatifs
+      lignes.push(
+        { 'NOM ET PRENOM': 'ACHRAF ABIDY', 'JRS OUVRE': 25, 'BASE': 3190.0, 'BRUT': 3067.31, 'CNI': 'WA299259', 'CNSS': '170989312', 'SITUATION': 'ACTIF' },
+        { 'NOM ET PRENOM': 'BOUABID EL BACHRI', 'JRS OUVRE': 19, 'BASE': 3190.0, 'BRUT': 2331.15, 'CNI': 'Q235705', 'CNSS': '151708596', 'SITUATION': 'ACTIF' },
+        { 'NOM ET PRENOM': 'AHMED EL WARDI', 'JRS OUVRE': 26, 'BASE': 3190.0, 'BRUT': 3190.0, 'CNI': 'WA198565', 'CNSS': '188026348', 'SITUATION': 'ACTIF' },
+        { 'NOM ET PRENOM': 'YOUSSEF RAZAKI', 'JRS OUVRE': 25, 'BASE': 3190.0, 'BRUT': 3067.31, 'CNI': 'WA347908', 'CNSS': '101455267', 'SITUATION': 'ACTIF' },
+        { 'NOM ET PRENOM': 'ASSIA KOTOUBI', 'JRS OUVRE': 24, 'BASE': 3190.0, 'BRUT': 2944.62, 'CNI': 'WA234651', 'CNSS': '105318057', 'SITUATION': 'ACTIF' }
+      );
+    }
+
+    const worksheet = XLSX.utils.json_to_sheet(lignes);
+    // Ajuster largeurs de colonnes
+    worksheet['!cols'] = [
+      { wch: 30 }, // NOM ET PRENOM
+      { wch: 12 }, // JRS OUVRE
+      { wch: 14 }, // BASE
+      { wch: 14 }, // BRUT
+      { wch: 14 }, // CNI
+      { wch: 16 }, // CNSS
+      { wch: 14 }, // SITUATION
+    ];
+
+    const workbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(workbook, worksheet, 'Calcul Salaires Mensuel');
+    return new Uint8Array(XLSX.write(workbook, { bookType: 'xlsx', type: 'array' }));
+  },
+
+  /**
+   * Génère un modèle CSV pour la liste mensuelle
+   */
+  genererModeleCsv(baseSalaries?: SalarieReferentiel[]): string {
+    const lignesCsv: string[] = ['NOM ET PRENOM,JRS OUVRE,BASE,BRUT,CNI,CNSS,SITUATION'];
+
+    if (baseSalaries && baseSalaries.length > 0) {
+      baseSalaries.forEach(s => {
+        const estSorti = s.situation === 'SORTI';
+        const jrs = estSorti ? 0 : 26;
+        const brut = estSorti ? '0.00' : '3190.00';
+        lignesCsv.push(`"${s.nomComplet}",${jrs},3190.00,${brut},"${s.cni || ''}","${s.immatriculationCnss || ''}","${s.situation || 'ACTIF'}"`);
+      });
+    } else {
+      lignesCsv.push('"ACHRAF ABIDY",25,3190.00,3067.31,"WA299259","170989312","ACTIF"');
+      lignesCsv.push('"BOUABID EL BACHRI",19,3190.00,2331.15,"Q235705","151708596","ACTIF"');
+      lignesCsv.push('"AHMED EL WARDI",26,3190.00,3190.00,"WA198565","188026348","ACTIF"');
+    }
+
+    return lignesCsv.join('\n');
   },
 
   /**

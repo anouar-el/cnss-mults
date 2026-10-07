@@ -31,6 +31,8 @@ import {
   CreditCard,
   FolderCheck,
   HardDrive,
+  Download,
+  ClipboardPaste,
 } from 'lucide-react';
 import { RapprochementsView } from './components/RapprochementsView';
 import { AnomaliesView } from './components/AnomaliesView';
@@ -74,7 +76,9 @@ import {
 import {
   chargerBaseSalariesReelle,
   chargerLignesPaieReelles,
+  RAW_CALCUL_SALAIRE_SEPTEMBRE,
 } from './data/septembreRealData';
+import { excelService } from './services/excelService';
 import { rapprocherLigne, executerRapprochement } from './services/matchingEngine';
 import { validationEngine } from './services/validationEngine';
 import { persistenceService } from './services/persistenceService';
@@ -1149,6 +1153,47 @@ export default function App() {
     }
   };
 
+  // Chargement direct de la liste mensuelle réelle de test (88 salariés)
+  const handleChargerListeDemo = () => {
+    const lignesCsv: string[] = ['NOM ET PRENOM,JRS OUVRE,BASE,BRUT'];
+    RAW_CALCUL_SALAIRE_SEPTEMBRE.forEach(row => {
+      lignesCsv.push(`"${row.nom}",${row.jours},${row.base},${row.brut}`);
+    });
+    lignesCsv.push('"TOTAL GENERAL",1789,280720,270115');
+
+    const csvContent = lignesCsv.join('\n');
+    const analyse = excelService.analyserBufferOuClasseur(
+      csvContent,
+      `calcul_salaire_${moisActif}_mults.csv`,
+      csvContent.length,
+      new Date().toISOString()
+    );
+    const lignes = excelService.convertirEnLignesPaie(analyse, moisActif);
+    handleImportPaieConfirme(lignes, analyse);
+    afficherNotification(`Liste de salaires réelle chargée avec succès (${lignes.length} salariés).`);
+  };
+
+  // Téléchargement du gabarit / modèle Excel pré-rempli avec les salariés de la base CNSS
+  const handleTelechargerModeleExcel = () => {
+    try {
+      const bytes = excelService.genererModeleExcel(baseSalaries);
+      const blob = new Blob([bytes as any], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `modele_liste_paie_${moisActif}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      afficherNotification(`Modèle Excel pré-rempli téléchargé (${baseSalaries.length} salariés CNSS inclus).`);
+    } catch (e: any) {
+      afficherNotification(`Erreur lors du téléchargement : ${e.message}`);
+    }
+  };
+
   // -------------------------------------------------------------------------
   // HANDLERS REGISTRE CNSS MENSUEL (PROMPT 06)
   // -------------------------------------------------------------------------
@@ -1911,37 +1956,211 @@ export default function App() {
 
       {/* CONTENU PRINCIPAL SELON L'ONGLET ACTIF */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* ÉTAT VIERGE SI AUCUN FICHIER IMPORTÉ */}
+        {/* ÉTAT VIERGE / HUB D'IMPORTATION ADAPTÉ POUR LA LISTE MENSUELLE */}
         {lignesPaie.length === 0 && vueActive === 'RAPPROCHEMENT' && (
-          <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center shadow-xs space-y-4 max-w-xl mx-auto my-8">
-            <div className="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto">
-              <Upload className="w-8 h-8" />
-            </div>
-            <div>
-              <h3 className="text-base font-bold text-slate-900">
-                Période {periodeCourante.libelle} vierge
-              </h3>
-              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                Aucun fichier de calcul des salaires n'a encore été importé pour cette période. Vous pouvez importer un fichier Excel ou CSV pour lancer le rapprochement.
-              </p>
+          <div className="bg-white rounded-3xl border border-slate-200 p-8 sm:p-10 shadow-xs space-y-8 max-w-4xl mx-auto my-6">
+            <div className="text-center space-y-3">
+              <div className="inline-flex p-3 rounded-2xl bg-emerald-100 text-emerald-800 shadow-2xs">
+                <Upload className="w-8 h-8" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-xl font-black text-slate-900">
+                  Importation de la Liste Mensuelle des Salaires
+                </h3>
+                <p className="text-sm text-slate-600 max-w-2xl mx-auto">
+                  Période active : <span className="font-bold text-slate-900">{periodeCourante.libelle}</span> ({moisActif}) &bull; Aucun fichier de paie importé pour l'instant.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200 flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Base CNSS active : {baseSalaries.length} salariés prêts au rapprochement</span>
+                </span>
+                <span className="px-3 py-1 rounded-full text-xs font-bold bg-blue-50 text-blue-800 border border-blue-200 flex items-center gap-1.5">
+                  <FileSpreadsheet className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Formats acceptés : Excel (.xlsx, .xls), CSV (.csv) & Copier-Coller</span>
+                </span>
+              </div>
             </div>
 
-            <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
-              <button
-                onClick={() => setIsImportPaieOpen(true)}
-                className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Upload className="w-4 h-4" />
-                <span>Importer le Fichier de Paie</span>
-              </button>
+            {/* 3 ACTIONS CLÉS D'IMPORT */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {/* Option 1 : Importer son propre fichier / copier-coller */}
+              <div className="p-5 rounded-2xl border-2 border-emerald-500 bg-emerald-50/40 hover:bg-emerald-50/70 transition-all flex flex-col justify-between space-y-4">
+                <div className="space-y-2">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-xs">
+                    <Upload className="w-5 h-5" />
+                  </div>
+                  <h4 className="font-bold text-sm text-slate-900">
+                    1. Importer ma Liste
+                  </h4>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Glissez-déposez votre fichier de calcul des salaires ou collez directement vos colonnes depuis Excel.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setIsImportPaieOpen(true)}
+                  className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Upload className="w-4 h-4" />
+                  <span>Ouvrir l'Importateur</span>
+                </button>
+              </div>
 
-              <button
-                onClick={() => setIsImportBaseCnssOpen(true)}
-                className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs border border-slate-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <Database className="w-4 h-4 text-teal-600" />
-                <span>Mettre à jour la Base CNSS ({baseSalaries.length})</span>
-              </button>
+              {/* Option 2 : Télécharger le modèle pré-rempli */}
+              <div className="p-5 rounded-2xl border border-slate-200 bg-slate-50 hover:bg-slate-100/70 transition-all flex flex-col justify-between space-y-4">
+                <div className="space-y-2">
+                  <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
+                    <Download className="w-5 h-5" />
+                  </div>
+                  <h4 className="font-bold text-sm text-slate-900">
+                    2. Modèle Excel Prêt à l'Emploi
+                  </h4>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Téléchargez le gabarit Excel (.xlsx) pré-rempli avec les <strong>{baseSalaries.length} salariés CNSS</strong> pour saisir vos jours et salaires du mois.
+                  </p>
+                </div>
+                <button
+                  onClick={handleTelechargerModeleExcel}
+                  className="w-full py-2.5 px-4 bg-white hover:bg-slate-200 text-slate-800 font-bold text-xs rounded-xl border border-slate-300 transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-blue-600" />
+                  <span>Télécharger le Modèle (.xlsx)</span>
+                </button>
+              </div>
+
+              {/* Option 3 : Charger le jeu de données réel de Septembre */}
+              <div className="p-5 rounded-2xl border border-amber-200 bg-amber-50/40 hover:bg-amber-50/80 transition-all flex flex-col justify-between space-y-4">
+                <div className="space-y-2">
+                  <div className="w-10 h-10 rounded-xl bg-amber-600 text-white flex items-center justify-center shadow-xs">
+                    <Sparkles className="w-5 h-5" />
+                  </div>
+                  <h4 className="font-bold text-sm text-slate-900">
+                    3. Liste Réelle Démo (88 salariés)
+                  </h4>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Chargez en un clic le jeu de paie réel de MULT.S pour tester immédiatement l'ensemble du workflow et les contrôles.
+                  </p>
+                </div>
+                <button
+                  onClick={handleChargerListeDemo}
+                  className="w-full py-2.5 px-4 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <Sparkles className="w-4 h-4" />
+                  <span>Charger les 88 Salariés</span>
+                </button>
+              </div>
+            </div>
+
+            {/* GUIDE TECHNIQUE DES COLONNES DE LA LISTE MENSUELLE */}
+            <div className="p-6 bg-slate-50/80 rounded-2xl border border-slate-200 space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-emerald-600" />
+                  <h4 className="font-bold text-xs uppercase tracking-wider text-slate-800">
+                    Colonnes reconnues pour votre liste mensuelle
+                  </h4>
+                </div>
+                <span className="text-[11px] text-slate-500 font-medium">
+                  Ordre libre &bull; Détection multi-synonymes automatique
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-emerald-800">NOM ET PRENOM</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-rose-100 text-rose-800">Requis</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    Nom complet (ou NOM, SALARIE, AGENT, EMPLOYE)
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-emerald-800">JRS OUVRE</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-rose-100 text-rose-800">Requis</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    Jours travaillés (ou JOURS, POINTAGE, NB JOURS)
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-emerald-800">BASE</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-rose-100 text-rose-800">Requis</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    Salaire de base (ou SALAIRE BASE, SB, BASE MENSUELLE)
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-emerald-800">BRUT</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-black bg-rose-100 text-rose-800">Requis</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    Salaire brut (ou SALAIRE BRUT, BRUT GLOBAL, REMUNERATION)
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-slate-800">CNI</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-slate-100 text-slate-600">Optionnel</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    Numéro CIN/CNI (renforce le scoring à 100%)
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-slate-800">CNSS</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-slate-100 text-slate-600">Optionnel</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    Immatriculation CNSS (format numérique ou texte)
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-slate-800">SITUATION</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-slate-100 text-slate-600">Optionnel</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    ACTIF, SORTI (so), ou ACCIDENT_TRAVAIL (AT)
+                  </p>
+                </div>
+
+                <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="font-mono font-bold text-slate-800">CLIENT</span>
+                    <span className="px-1.5 py-0.2 rounded text-[9px] font-medium bg-slate-100 text-slate-600">Optionnel</span>
+                  </div>
+                  <p className="text-[11px] text-slate-500 leading-tight">
+                    Affectation, chantier ou société cliente
+                  </p>
+                </div>
+              </div>
+
+              <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500">
+                <div className="flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Isolation automatique des lignes de totaux pour ne pas fausser le décompte des salariés.</span>
+                </div>
+                <button
+                  onClick={() => setIsImportBaseCnssOpen(true)}
+                  className="text-teal-700 hover:text-teal-800 font-bold flex items-center gap-1 cursor-pointer shrink-0"
+                >
+                  <Database className="w-3.5 h-3.5" />
+                  <span>Gérer la Base CNSS ({baseSalaries.length} salariés)</span>
+                </button>
+              </div>
             </div>
           </div>
         )}
