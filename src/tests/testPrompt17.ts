@@ -142,7 +142,7 @@ export async function executerTestsPrompt17(): Promise<BilanPrompt17> {
       res.auditEvent.action === 'ARBITRAGE_REACTIVATION_SORTI' &&
         res.auditEvent.ancienneValeur === 'SORTI' &&
         res.auditEvent.nouvelleValeur === 'ACTIF' &&
-        res.auditEvent.justification.includes('Arbitrage humain'),
+        Boolean(res.auditEvent.justification?.includes('Arbitrage humain')),
       `Action: ${res.auditEvent.action}, justification: ${res.auditEvent.justification}`
     );
   } catch (err: any) {
@@ -341,12 +341,12 @@ export async function executerTestsPrompt17(): Promise<BilanPrompt17> {
       'P17-TEST-08-A',
       'Partitionnement RLS company_id = 6541835',
       'companyId est strictement 6541835',
-      supabasePersistenceService.companyId === companyIdTest,
-      `Company ID: ${supabasePersistenceService.companyId}`
+      supabasePersistenceService.getCompanyAffiliation() === companyIdTest,
+      `Company ID: ${supabasePersistenceService.getCompanyAffiliation()}`
     );
 
     // 2. Refus de succès si Supabase retourne une erreur (Zéro fallback silencieux)
-    supabasePersistenceService.simulerErreurSupabase = true;
+    supabasePersistenceService.setSimulerErreurSupabase(true);
     let erreurLevee = false;
     try {
       await supabasePersistenceService.modifierStatutSalarie(
@@ -357,7 +357,7 @@ export async function executerTestsPrompt17(): Promise<BilanPrompt17> {
     } catch {
       erreurLevee = true;
     } finally {
-      supabasePersistenceService.simulerErreurSupabase = false;
+      supabasePersistenceService.setSimulerErreurSupabase(false);
     }
 
     assert(
