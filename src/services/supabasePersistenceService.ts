@@ -16,11 +16,13 @@ import {
   LignePaieImportee,
   EvenementAudit,
   ResultatRapprochement,
+  SituationEmploye,
 } from '../types/cnss';
 import { EntrepriseCnssConfig, DocumentBordereauCnss } from '../types/cnssBordereau';
 import { DocumentBordereauPaiementCnss } from '../types/cnssPaiement';
 import { DossierCnssMensuel } from '../types/cnssDossier';
 import { FichierPreetabliCnss } from '../types/cnssPreetabli';
+import { chargerBaseSalariesReelle } from '../data/septembreRealData';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
 
 export interface SupabaseEntitiesStats {
@@ -130,6 +132,15 @@ class SupabasePersistenceService {
   // 2. SALARIÉS (employees)
   // =========================================================================
   async getSalaries(): Promise<SalarieReferentiel[]> {
+    if (this.tables.employees.size === 0) {
+      try {
+        const init = chargerBaseSalariesReelle();
+        init.forEach(s => this.tables.employees.set(s.id, { ...s }));
+      } catch {
+        // ignore
+      }
+    }
+
     if (isSupabaseConfigured()) {
       try {
         const { data, error } = await supabase
@@ -138,7 +149,7 @@ class SupabasePersistenceService {
           .order('business_id');
 
         if (!error && data && data.length > 0) {
-          return data.map(d => ({
+          const fromDb = data.map(d => ({
             id: d.business_id,
             nomComplet: d.full_name,
             nomNormalise: d.normalized_name,
@@ -151,12 +162,212 @@ class SupabasePersistenceService {
             derniereDeclaration: d.last_declaration_period,
             aliases: [],
           }));
+          fromDb.forEach(s => this.tables.employees.set(s.id, s));
+          return fromDb;
         }
       } catch {
         // Fallback miroir
       }
     }
     return Array.from(this.tables.employees.values());
+  }
+
+  async getSalarie(id: string): Promise<SalarieReferentiel | null> {
+    if (this.tables.employees.size === 0) {
+      try {
+        const init = chargerBaseSalariesReelle();
+        init.forEach(s => this.tables.employees.set(s.id, { ...s }));
+      } catch {
+        // ignore
+      }
+    }
+
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('employees')
+          .select('*')
+          .eq('company_id', this.companyId)
+          .eq('business_id', id)
+          .maybeSingle();
+
+        if (!error && data) {
+          const sal: SalarieReferentiel = {
+            id: data.business_id,
+            nomComplet: data.full_name,
+            nomNormalise: data.normalized_name,
+            tokensNom: data.name_tokens || [],
+            cni: data.cni,
+            immatriculationCnss: data.cnss_number,
+            situation: data.situation,
+            situationOriginale: data.original_situation_code,
+            datePremiereApparition: data.first_seen_period,
+            derniereDeclaration: data.last_declaration_period,
+            aliases: [],
+            actif: data.is_active ?? (data.situation === 'ACTIF'),
+          };
+          this.tables.employees.set(sal.id, sal);
+          return sal;
+        }
+      } catch {
+        // Fallback miroir
+      }
+    }
+
+    return this.tables.employees.get(id) || null;
+  }
+
+  async modifierStatutSalarie(
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    options: {
+      monthId?: string;
+      motif?: string;
+      utilisateur?: string;
+      joursPaieMois?: number;
+      decisionSortieExplicite?: 'REACTIVATION_CONFIRMEE' | 'CONSERVE_SORTI';
+    } = {}
+  ): Promise<{ salarie: SalarieReferentiel; auditEvent: EvenementAudit }> {
+    if (this.tables.employees.size === 0) {
+      const init = chargerBaseSalariesReelle();
+      init.forEach(s => this.tables.employees.set(s.id, { ...s }));
+    }
+
+    let salarie = this.tables.employees.get(salarieId);
+    if (!salarie) {
+      const tous = await this.getSalaries();
+      salarie = tous.find(s => s.id === salarieId);
+    }
+
+    if (!salarie) {
+      throw new Error(`Salarié introuvable avec l'identifiant ${salarieId}`);
+    }
+
+    const ancienStatut = salarie.situation || 'ACTIF';
+
+    console.log('[SUPABASE-SYNC] avant UPDATE', {
+      table: 'employees',
+      company_id: this.companyId,
+      business_id: salarieId,
+      ancienStatut,
+      nouveauStatut,
+      motif: options.motif,
+    });
+
+    if (this.simulerErreurSupabase) {
+      console.error('[SUPABASE-SYNC] erreur UPDATE', {
+        table: 'employees',
+        id: salarieId,
+        cause: 'Erreur Supabase simulée',
+      });
+      throw new Error('[SUPABASE-SYNC] Échec de la modification du statut (erreur simulée)');
+    }
+
+    const salarieMisAJour: SalarieReferentiel = {
+      ...salarie,
+      situation: nouveauStatut,
+      actif: nouveauStatut === 'ACTIF',
+    };
+
+    if (isSupabaseConfigured()) {
+      try {
+        const { data, error } = await supabase
+          .from('employees')
+          .update({
+            situation: nouveauStatut,
+            is_active: nouveauStatut === 'ACTIF',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('company_id', this.companyId)
+          .eq('business_id', salarieId);
+
+        if (error) {
+          console.error('[SUPABASE-SYNC] erreur UPDATE', error);
+          if (error.code !== 'PGRST205') {
+            throw new Error(`[SUPABASE-SYNC] Erreur Supabase (${error.code || 'UNKNOWN'}) : ${error.message}`);
+          }
+        } else {
+          console.log('[SUPABASE-SYNC] résultat UPDATE', {
+            table: 'employees',
+            id: salarieId,
+            succes: true,
+            nouveauStatut,
+            data,
+          });
+        }
+      } catch (err: any) {
+        if (err.message?.includes('[SUPABASE-SYNC]')) {
+          throw err;
+        }
+        console.error('[SUPABASE-SYNC] erreur UPDATE', err);
+      }
+    }
+
+    // Mise à jour de la table en mémoire
+    this.tables.employees.set(salarieId, salarieMisAJour);
+
+    // Mettre à jour la situation dans les rapprochements de la période si présents
+    const monthId = options.monthId || '2026-09';
+    const raps = this.tables.reconciliations.get(monthId);
+    if (raps) {
+      const rapIdx = raps.findIndex(r => r.salariePropose?.id === salarieId || r.salarieBaseId === salarieId);
+      if (rapIdx !== -1) {
+        const rap = { ...raps[rapIdx] };
+        if (rap.salariePropose) {
+          rap.salariePropose = {
+            ...rap.salariePropose,
+            situation: nouveauStatut,
+            actif: nouveauStatut === 'ACTIF',
+          };
+        }
+        if (ancienStatut === 'SORTI' && nouveauStatut === 'ACTIF') {
+          rap.decisionSorti = 'REACTIVATION_CONFIRMEE';
+        } else if (nouveauStatut === 'SORTI') {
+          rap.decisionSorti = 'CONSERVE_SORTI';
+        }
+        raps[rapIdx] = rap;
+        this.tables.reconciliations.set(monthId, raps);
+
+        if (isSupabaseConfigured()) {
+          try {
+            await supabase
+              .from('reconciliations')
+              .update({
+                departure_decision: rap.decisionSorti || null,
+                raw_data_json: rap,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('company_id', this.companyId)
+              .eq('period_id', monthId)
+              .eq('id', rap.id);
+          } catch {
+            // ignore
+          }
+        }
+      }
+    }
+
+    // Création de l'événement d'audit
+    const estReactivation = ancienStatut === 'SORTI' && nouveauStatut === 'ACTIF';
+    const auditEvent: EvenementAudit = {
+      id: `audit_statut_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      date: new Date().toISOString(),
+      action: estReactivation ? 'ARBITRAGE_REACTIVATION_SORTI' : 'MODIFICATION_STATUT_SALARIE',
+      salarie: salarieMisAJour.nomComplet,
+      ancienneValeur: ancienStatut,
+      nouvelleValeur: nouveauStatut,
+      periodeConcernee: monthId,
+      utilisateur: options.utilisateur || 'Gestionnaire MULT.S',
+      justification:
+        options.motif ||
+        (estReactivation
+          ? 'Arbitrage humain : réactivation du salarié sorti'
+          : `Modification manuelle du statut : ${ancienStatut} ➔ ${nouveauStatut}`),
+    };
+
+    await this.enregistrerEvenementAudit(auditEvent);
+
+    return { salarie: salarieMisAJour, auditEvent };
   }
 
   async saveSalarie(salarie: SalarieReferentiel): Promise<void> {

@@ -27,11 +27,16 @@ import {
   SalarieReferentiel,
   AnomalieLigne,
   StatutLigneP5,
+  SituationEmploye,
 } from '../types/cnss';
 import { determinerStatutLigneP5 } from '../services/matchingEngine';
 import { ComparaisonFaceAFaceModal } from './ComparaisonFaceAFaceModal';
 import { ValidationGlobaleModal } from './ValidationGlobaleModal';
 import { ModifierAnomalieModal, DonneesModificationAnomalie } from './ModifierAnomalieModal';
+import {
+  ModifierStatutSalarieModal,
+  SalariePourModificationStatut,
+} from './ModifierStatutSalarieModal';
 import { masquerCni, masquerCnss } from '../utils/maskSensitive';
 
 interface RapprochementsViewProps {
@@ -70,6 +75,11 @@ interface RapprochementsViewProps {
     idRapprochement: string,
     donnees: DonneesModificationAnomalie
   ) => void;
+  onModifierStatutSalarie?: (
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    motif: string
+  ) => Promise<void>;
 }
 
 export type FiltreP5Type =
@@ -96,10 +106,14 @@ export const RapprochementsView: React.FC<RapprochementsViewProps> = ({
   onCreerNouveauSalarieEtRattacher,
   onValiderRapprochementGlobal,
   onSauvegarderModificationsAnomalie,
+  onModifierStatutSalarie,
 }) => {
   // Filtres rapides (Section 14)
   const [filtreActif, setFiltreActif] = useState<FiltreP5Type>('TOUS');
   const [rechercheTexte, setRechercheTexte] = useState('');
+
+  // Modale de modification manuelle du statut salarié (PROMPT 17)
+  const [salariePourStatutModal, setSalariePourStatutModal] = useState<SalariePourModificationStatut | null>(null);
 
   // Modale Face à Face (Section 6)
   const [ligneEnComparaison, setLigneEnComparaison] = useState<ResultatRapprochement | null>(null);
@@ -412,13 +426,14 @@ export const RapprochementsView: React.FC<RapprochementsViewProps> = ({
                 <th className="py-3 px-3 text-center">Score</th>
                 <th className="py-3 px-3">Méthode</th>
                 <th className="py-3 px-3 text-center">Statut</th>
+                <th className="py-3 px-3 text-center">Statut Salarié</th>
                 <th className="py-3 px-4 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {lignesFiltrees.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400 text-xs">
+                  <td colSpan={10} className="py-12 text-center text-slate-400 text-xs">
                     Aucune ligne de paie ne correspond aux filtres appliqués.
                   </td>
                 </tr>
@@ -559,6 +574,48 @@ export const RapprochementsView: React.FC<RapprochementsViewProps> = ({
                         </span>
                       </td>
 
+                      {/* Statut Salarié Référentiel avec action Modifier (PROMPT 17) */}
+                      <td className="py-3 px-3 text-center">
+                        {(() => {
+                          const sal = salarie || baseSalaries.find(s => s.id === rap.salarieBaseId);
+                          const sit = sal?.situation || 'ACTIF';
+                          return (
+                            <div className="inline-flex flex-col items-center gap-1">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                                sit === 'ACTIF'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : sit === 'SORTI'
+                                  ? 'bg-slate-200 text-slate-800 border-slate-300'
+                                  : 'bg-amber-100 text-amber-900 border-amber-300'
+                              }`}>
+                                {sit}
+                              </span>
+                              {onModifierStatutSalarie && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSalariePourStatutModal({
+                                      id: sal?.id || rap.salarieBaseId || rap.id,
+                                      nomComplet: sal?.nomComplet || rap.nomDeclareFinal || rap.lignePaieId,
+                                      cni: sal?.cni || rap.cniDeclareeFinale,
+                                      immatriculationCnss: sal?.immatriculationCnss || rap.cnssDeclareeFinale,
+                                      situation: sit,
+                                      joursMois: rap.validationJours?.joursDeclares ?? rap.validationJours?.joursImportes,
+                                    });
+                                  }}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                                  title="Modifier manuellement le statut de ce salarié"
+                                >
+                                  <Edit3 className="w-2.5 h-2.5" />
+                                  Modifier
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })()}
+                      </td>
+
                       {/* Actions */}
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
@@ -679,6 +736,18 @@ export const RapprochementsView: React.FC<RapprochementsViewProps> = ({
         onConfirmerValidationGlobale={() => {
           if (onValiderRapprochementGlobal) {
             onValiderRapprochementGlobal();
+          }
+        }}
+      />
+
+      {/* MODALE DE MODIFICATION DU STATUT SALARIÉ (PROMPT 17) */}
+      <ModifierStatutSalarieModal
+        isOpen={Boolean(salariePourStatutModal)}
+        onClose={() => setSalariePourStatutModal(null)}
+        salarie={salariePourStatutModal}
+        onConfirmer={async (id, statut, motif) => {
+          if (onModifierStatutSalarie) {
+            await onModifierStatutSalarie(id, statut, motif);
           }
         }}
       />

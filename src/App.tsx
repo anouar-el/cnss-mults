@@ -60,6 +60,7 @@ import { executerTestsPrompt08, BilanPrompt08 } from './tests/testPrompt08';
 import { executerTestsPrompt09, BilanPrompt09 } from './tests/testPrompt09';
 import { executerTestsPrompt10, BilanPrompt10 } from './tests/testPrompt10';
 import { executerTestsPrompt11, BilanPrompt11 } from './tests/testPrompt11';
+import { executerTestsPrompt17, BilanPrompt17 } from './tests/testPrompt17';
 import { BackupRestoreView } from './components/BackupRestoreView';
 import { DonneesModificationAnomalie } from './components/ModifierAnomalieModal';
 import { MigrationSupabaseModal } from './components/MigrationSupabaseModal';
@@ -92,6 +93,7 @@ import {
   AnalyseFichierExcel,
   LigneRegistreCnss,
   EvenementAudit,
+  SituationEmploye,
 } from './types/cnss';
 
 type VueType =
@@ -107,6 +109,7 @@ type VueType =
   | 'NOUVEAUX'
   | 'SORTIES'
   | 'ALIAS'
+  | 'TESTS_P17'
   | 'TESTS_P11'
   | 'TESTS_P10'
   | 'TESTS_P9'
@@ -206,6 +209,11 @@ export default function App() {
   const [bilanP9, setBilanP9] = useState<BilanPrompt09>(() => executerTestsPrompt09());
   const [bilanP10, setBilanP10] = useState<BilanPrompt10>(() => executerTestsPrompt10());
   const [bilanP11, setBilanP11] = useState<BilanPrompt11>(() => executerTestsPrompt11());
+  const [bilanP17, setBilanP17] = useState<BilanPrompt17 | null>(null);
+
+  useEffect(() => {
+    executerTestsPrompt17().then(setBilanP17).catch(console.error);
+  }, []);
 
   // Registre Mensuel CNSS (PROMPT 06)
   const [lignesRegistre, setLignesRegistre] = useState<LigneRegistreCnss[]>(() => {
@@ -373,7 +381,18 @@ export default function App() {
     async function chargerDepuisSupabaseOuCache() {
       console.log('[SUPABASE-SYNC] lecture après refresh', { moisActif });
       try {
-        // 1. Supabase en priorité absolue
+        // 0. Supabase en priorité absolue pour le référentiel salariés (baseSalaries)
+        const supaSalaries = await supabasePersistenceService.getSalaries();
+        if (!ignore && supaSalaries && supaSalaries.length > 0) {
+          persistenceService.saveSalaries(supaSalaries);
+          setBaseSalaries(supaSalaries);
+        }
+      } catch (err) {
+        console.warn('[SUPABASE-SYNC] Erreur lecture salariés Supabase, bascule sur cache local', err);
+      }
+
+      try {
+        // 1. Supabase en priorité absolue pour les rapprochements
         const supaRaps = await supabasePersistenceService.getRapprochementsPeriode(moisActif);
         if (!ignore && supaRaps && supaRaps.length > 0) {
           persistenceService.saveRapprochementsPeriode(moisActif, supaRaps);
@@ -518,6 +537,101 @@ export default function App() {
       console.error('[SUPABASE-SYNC] erreur UPDATE', err);
       afficherNotification(`Échec de persistance Supabase : ${err.message || 'Erreur réseau'}`);
       return false;
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // MODIFICATION MANUELLE DU STATUT SALARIÉ (PROMPT 17)
+  // FLUX OBLIGATOIRE : UI -> SERVICE -> UPDATE SUPABASE -> REACT STATE -> CACHE LOCAL -> AUDIT
+  // -------------------------------------------------------------------------
+  const handleModifierStatutSalarie = async (
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    motif: string
+  ): Promise<void> => {
+    try {
+      console.log('[SUPABASE-SYNC] Début modification statut salarié', {
+        salarieId,
+        nouveauStatut,
+        motif,
+      });
+
+      // 1. UPDATE Supabase prioritaire
+      const { salarie: salarieMisAJour, auditEvent } = await supabasePersistenceService.modifierStatutSalarie(
+        salarieId,
+        nouveauStatut,
+        {
+          monthId: moisActif,
+          motif,
+          utilisateur: 'Gestionnaire MULT.S',
+        }
+      );
+
+      // 2. Mettre à jour cache local
+      persistenceService.modifierStatutSalarie(salarieId, nouveauStatut, {
+        monthId: moisActif,
+        motif,
+        utilisateur: 'Gestionnaire MULT.S',
+      });
+
+      // 3. Mettre à jour l'état React de baseSalaries
+      setBaseSalaries(prev => {
+        const next = prev.map(s => (s.id === salarieId ? salarieMisAJour : s));
+        persistenceService.saveSalaries(next);
+        return next;
+      });
+
+      // 4. Mettre à jour l'état React des rapprochements de la période
+      setRapprochements(prev => {
+        const next = prev.map(r => {
+          if (r.salariePropose?.id === salarieId || r.salarieBaseId === salarieId) {
+            const salPropose = r.salariePropose
+              ? { ...r.salariePropose, situation: nouveauStatut, actif: nouveauStatut === 'ACTIF' }
+              : undefined;
+            const decSorti =
+              nouveauStatut === 'ACTIF'
+                ? 'REACTIVATION_CONFIRMEE'
+                : nouveauStatut === 'SORTI'
+                ? 'CONSERVE_SORTI'
+                : r.decisionSorti;
+            return {
+              ...r,
+              salariePropose: salPropose,
+              decisionSorti: decSorti,
+            };
+          }
+          return r;
+        });
+        persistenceService.saveRapprochementsPeriode(moisActif, next);
+        supabasePersistenceService.saveRapprochementsPeriode(moisActif, next).catch(() => {});
+        return next;
+      });
+
+      // 5. Mettre à jour l'état React du registre si présent
+      setLignesRegistre(prev => {
+        const next = prev.map(l => {
+          if (l.salarieId === salarieId) {
+            return {
+              ...l,
+              situation: nouveauStatut,
+            };
+          }
+          return l;
+        });
+        persistenceService.saveRegistrePeriode(moisActif, next);
+        return next;
+      });
+
+      // 6. Mettre à jour les décisions de sorties
+      setDecisionsSorties(persistenceService.getDecisionsSorties());
+
+      afficherNotification(
+        `Statut de ${salarieMisAJour.nomComplet} mis à jour : ${nouveauStatut} (persistance Supabase confirmée).`
+      );
+    } catch (err: any) {
+      console.error('[SUPABASE-SYNC] Erreur lors de la modification du statut', err);
+      afficherNotification(`❌ Erreur Supabase : ${err.message || 'Impossible de mettre à jour le statut'}`);
+      throw err;
     }
   };
 
@@ -1513,6 +1627,23 @@ export default function App() {
             🏷️ Alias Mémorisés ({aliases.length})
           </button>
 
+          {/* Onglet Tests PROMPT 17 (STATUTS SALARIÉS & PERSISTANCE SUPABASE) */}
+          <button
+            onClick={() => setVueActive('TESTS_P17')}
+            className={`py-2.5 px-3.5 text-xs font-bold border-b-2 transition-colors cursor-pointer whitespace-nowrap flex items-center gap-1 ${
+              vueActive === 'TESTS_P17'
+                ? 'border-indigo-600 text-indigo-700 bg-indigo-50/50'
+                : 'border-transparent text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <span>👤 Tests PROMPT 17 (Statuts)</span>
+            <span className={`px-1.5 py-0.2 rounded text-[10px] font-black ${
+              bilanP17 && bilanP17.echoues === 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+            }`}>
+              {bilanP17 ? `${bilanP17.reussis}/${bilanP17.total}` : '...'}
+            </span>
+          </button>
+
           {/* Onglet Tests PROMPT 11 (NOUVEAU - BACKUP & REPRISE APRÈS SINISTRE) */}
           <button
             onClick={() => setVueActive('TESTS_P11')}
@@ -1818,6 +1949,7 @@ export default function App() {
             onDemanderReouverture={handleDemanderReouvertureRegistre}
             onValiderToutLeRegistre={handleValiderToutLeRegistre}
             onNaviguerVersRapprochement={() => setVueActive('RAPPROCHEMENT')}
+            onModifierStatutSalarie={handleModifierStatutSalarie}
           />
         )}
 
@@ -1919,6 +2051,7 @@ export default function App() {
             onCreerNouveauSalarieEtRattacher={handleCreerNouveauSalarieEtRattacher}
             onValiderRapprochementGlobal={handleValiderRapprochementGlobal}
             onSauvegarderModificationsAnomalie={handleSauvegarderModificationsAnomalie}
+            onModifierStatutSalarie={handleModifierStatutSalarie}
           />
         )}
 
@@ -1934,6 +2067,7 @@ export default function App() {
             onNaviguerVersRapprochement={() => setVueActive('RAPPROCHEMENT')}
             onSauvegarderModificationsAnomalie={handleSauvegarderModificationsAnomalie}
             onChoisirCandidatAmbigu={handleChoisirCandidatAmbigu}
+            onModifierStatutSalarie={handleModifierStatutSalarie}
           />
         )}
 
@@ -1952,6 +2086,7 @@ export default function App() {
             }
             onCompleterIdentifiantNouveau={handleCompleterCni}
             onNaviguerVersRapprochement={() => setVueActive('RAPPROCHEMENT')}
+            onModifierStatutSalarie={handleModifierStatutSalarie}
           />
         )}
 
@@ -1964,6 +2099,7 @@ export default function App() {
             onMaintenirActif={handleMaintenirActif}
             onRechercherCorrespondanceAlternative={() => setVueActive('RAPPROCHEMENT')}
             onArbitrerReactivationSorti={handleArbitrerSortiRetravaillant}
+            onModifierStatutSalarie={handleModifierStatutSalarie}
           />
         )}
 
@@ -2010,6 +2146,114 @@ export default function App() {
                 ))}
               </div>
             )}
+          </div>
+        )}
+
+        {/* TESTS AUTOMATISÉS PROMPT 17 (MODIFICATION DU STATUT SALARIÉ, PERSISTANCE SUPABASE & AUDIT) */}
+        {vueActive === 'TESTS_P17' && (
+          <div className="space-y-5">
+            <div className={`p-5 rounded-2xl border shadow-xs ${
+              bilanP17 && bilanP17.echoues === 0
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                : 'bg-rose-50 border-rose-300 text-rose-900'
+            }`}>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  {bilanP17 && bilanP17.echoues === 0 ? (
+                    <div className="w-12 h-12 rounded-xl bg-emerald-700 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <CheckCircle2 className="w-7 h-7" />
+                    </div>
+                  ) : (
+                    <div className="w-12 h-12 rounded-xl bg-rose-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <XCircle className="w-7 h-7" />
+                    </div>
+                  )}
+                  <div>
+                    <h2 className="text-xl font-black">
+                      {bilanP17 && bilanP17.echoues === 0
+                        ? 'Banc PROMPT 17 validé à 100% (Modification du Statut Salarié & Persistance Supabase)'
+                        : 'Exécution des tests PROMPT 17 en cours...'}
+                    </h2>
+                    <p className="text-xs mt-0.5 opacity-90">
+                      Gestion des statuts (ACTIF, SORTI, À_VÉRIFIER), flux Supabase prioritaire (UPDATE & absence d'erreur), persistance après refresh F5, arbitrage humain obligatoire pour salariés sortis avec jours travaillés, et traçabilité d'audit intégrale ({bilanP17 ? `${Math.round(bilanP17.tempsExecutionMs)} ms` : '...'}).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-4 bg-white/80 backdrop-blur-xs px-4 py-2.5 rounded-xl border border-emerald-200">
+                  <div className="text-center">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Tests Réussis</span>
+                    <span className="text-2xl font-black text-emerald-700">{bilanP17?.reussis ?? 0}</span>
+                  </div>
+                  <div className="h-8 w-px bg-slate-200" />
+                  <div className="text-center">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Échecs</span>
+                    <span className={`text-2xl font-black ${bilanP17?.echoues === 0 ? 'text-slate-400' : 'text-rose-700'}`}>
+                      {bilanP17?.echoues ?? 0}
+                    </span>
+                  </div>
+                  <div className="h-8 w-px bg-slate-200" />
+                  <div className="text-center">
+                    <span className="text-[10px] uppercase font-bold text-slate-500 block">Total</span>
+                    <span className="text-2xl font-black text-slate-900">{bilanP17?.total ?? 0}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Liste détaillée des tests PROMPT 17 */}
+            <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-xs">
+              <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  Détail des assertions de persistance et de règles métiers
+                </span>
+                <button
+                  onClick={async () => {
+                    const b = await executerTestsPrompt17();
+                    setBilanP17(b);
+                  }}
+                  className="px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold cursor-pointer transition-all"
+                >
+                  Relancer les tests
+                </button>
+              </div>
+
+              <div className="divide-y divide-slate-100">
+                {bilanP17?.resultats.map(test => (
+                  <div key={test.id} className="p-4 hover:bg-slate-50/50 transition-colors">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-2.5">
+                        <span className={`mt-0.5 p-1 rounded-full ${
+                          test.succes ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'
+                        }`}>
+                          {test.succes ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                        </span>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs font-mono font-bold text-slate-500">{test.id}</span>
+                            <span className="text-xs font-bold text-slate-900">{test.cas}</span>
+                          </div>
+                          <div className="mt-1 text-xs text-slate-600">
+                            <span className="font-semibold text-slate-700">Attendu : </span>
+                            {test.attendu}
+                          </div>
+                          {test.details && (
+                            <div className="mt-0.5 text-[11px] text-slate-500 font-mono bg-slate-100 px-2 py-0.5 rounded inline-block">
+                              {test.details}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase ${
+                        test.succes ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                      }`}>
+                        {test.succes ? 'SUCCÈS' : 'ÉCHEC'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )}
 

@@ -22,8 +22,13 @@ import {
   ResultatRapprochement,
   SalarieReferentiel,
   SeveriteAnomalie,
+  SituationEmploye,
 } from '../types/cnss';
 import { ModifierAnomalieModal, DonneesModificationAnomalie } from './ModifierAnomalieModal';
+import {
+  ModifierStatutSalarieModal,
+  SalariePourModificationStatut,
+} from './ModifierStatutSalarieModal';
 
 interface AnomaliesViewProps {
   anomalies: AnomalieLigne[];
@@ -46,6 +51,11 @@ interface AnomaliesViewProps {
     salarieId: string,
     memoriserAlias: boolean
   ) => void;
+  onModifierStatutSalarie?: (
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    motif: string
+  ) => Promise<void>;
 }
 
 export const AnomaliesView: React.FC<AnomaliesViewProps> = ({
@@ -58,9 +68,13 @@ export const AnomaliesView: React.FC<AnomaliesViewProps> = ({
   onNaviguerVersRapprochement,
   onSauvegarderModificationsAnomalie,
   onChoisirCandidatAmbigu,
+  onModifierStatutSalarie,
 }) => {
   const [filtre, setFiltre] = useState<'TOUTES' | 'BLOQUANTE' | 'AVERTISSEMENT' | 'AMBIGUS' | 'RESOLUE'>('TOUTES');
   const [recherche, setRecherche] = useState('');
+
+  // Modale de modification directe du statut salarié (PROMPT 17)
+  const [salariePourStatutModal, setSalariePourStatutModal] = useState<SalariePourModificationStatut | null>(null);
 
   // Modale universelle de modification & résolution d'anomalie
   const [lignePourModification, setLignePourModification] = useState<ResultatRapprochement | null>(null);
@@ -231,6 +245,7 @@ export const AnomaliesView: React.FC<AnomaliesViewProps> = ({
             <thead>
               <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-bold uppercase tracking-wider text-[11px]">
                 <th className="py-3 px-3.5">Salarié Concerné</th>
+                <th className="py-3 px-3 text-center">STATUT</th>
                 <th className="py-3 px-3">Type d'Anomalie</th>
                 <th className="py-3 px-3">Gravité</th>
                 <th className="py-3 px-3 text-center">Valeur Importée</th>
@@ -242,7 +257,7 @@ export const AnomaliesView: React.FC<AnomaliesViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {anomaliesFiltrees.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                  <td colSpan={8} className="py-12 text-center text-slate-400">
                     <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-emerald-500" />
                     Aucune anomalie à afficher selon les critères sélectionnés.
                   </td>
@@ -261,6 +276,47 @@ export const AnomaliesView: React.FC<AnomaliesViewProps> = ({
                       {/* Salarié */}
                       <td className="py-3.5 px-3.5 font-bold text-slate-900">
                         {ano.salarieConcerne}
+                      </td>
+
+                      {/* Statut Salarié avec action Modifier (PROMPT 17) */}
+                      <td className="py-3.5 px-3 text-center">
+                        {(() => {
+                          const sal = rapLigne?.salariePropose || baseSalaries.find(s => s.nomComplet === ano.salarieConcerne || s.id === rapLigne?.salarieBaseId);
+                          const sit = sal?.situation || 'ACTIF';
+                          return (
+                            <div className="inline-flex flex-col items-center gap-1">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                                sit === 'ACTIF'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : sit === 'SORTI'
+                                  ? 'bg-slate-200 text-slate-800 border-slate-300'
+                                  : 'bg-amber-100 text-amber-900 border-amber-300'
+                              }`}>
+                                {sit}
+                              </span>
+                              {onModifierStatutSalarie && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSalariePourStatutModal({
+                                      id: sal?.id || rapLigne?.salarieBaseId || ano.salarieConcerne,
+                                      nomComplet: sal?.nomComplet || ano.salarieConcerne,
+                                      cni: sal?.cni || rapLigne?.cniDeclareeFinale,
+                                      immatriculationCnss: sal?.immatriculationCnss || rapLigne?.cnssDeclareeFinale,
+                                      situation: sit,
+                                      joursMois: rapLigne?.validationJours?.joursDeclares ?? rapLigne?.validationJours?.joursImportes,
+                                    });
+                                  }}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                                  title="Modifier manuellement le statut de ce salarié"
+                                >
+                                  <Edit3 className="w-2.5 h-2.5" />
+                                  Modifier
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Code anomalie */}
@@ -590,6 +646,17 @@ export const AnomaliesView: React.FC<AnomaliesViewProps> = ({
         onSauvegarderModifications={(id, donnees) => {
           if (onSauvegarderModificationsAnomalie) {
             onSauvegarderModificationsAnomalie(id, donnees);
+          }
+        }}
+      />
+      {/* MODALE DE MODIFICATION DIRECTE DU STATUT SALARIÉ (PROMPT 17) */}
+      <ModifierStatutSalarieModal
+        isOpen={Boolean(salariePourStatutModal)}
+        onClose={() => setSalariePourStatutModal(null)}
+        salarie={salariePourStatutModal}
+        onConfirmer={async (id, statut, motif) => {
+          if (onModifierStatutSalarie) {
+            await onModifierStatutSalarie(id, statut, motif);
           }
         }}
       />

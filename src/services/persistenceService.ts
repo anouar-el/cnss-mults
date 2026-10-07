@@ -14,6 +14,7 @@ import {
   LignePaieImportee,
   ResultatRapprochement,
   LigneRegistreCnss,
+  SituationEmploye,
 } from '../types/cnss';
 import {
   FichierPreetabliCnss,
@@ -298,6 +299,75 @@ export const persistenceService = {
 
   saveSalaries(salaries: SalarieReferentiel[]): void {
     safeSet(STORAGE_KEYS.SALARIES, JSON.stringify(salaries));
+  },
+
+  modifierStatutSalarie(
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    options: {
+      monthId?: string;
+      motif?: string;
+      utilisateur?: string;
+    } = {}
+  ): { salarie: SalarieReferentiel; auditEvent: EvenementAudit } {
+    const list = this.getSalaries();
+    const idx = list.findIndex(s => s.id === salarieId);
+    let salarie: SalarieReferentiel;
+    let ancienStatut = 'ACTIF';
+
+    if (idx !== -1) {
+      ancienStatut = list[idx].situation || 'ACTIF';
+      list[idx] = {
+        ...list[idx],
+        situation: nouveauStatut,
+        actif: nouveauStatut === 'ACTIF',
+      };
+      salarie = list[idx];
+      this.saveSalaries(list);
+    } else {
+      salarie = {
+        id: salarieId,
+        nomComplet: salarieId,
+        nomNormalise: salarieId,
+        tokensNom: [],
+        aliases: [],
+        situation: nouveauStatut,
+        actif: nouveauStatut === 'ACTIF',
+      };
+      list.push(salarie);
+      this.saveSalaries(list);
+    }
+
+    if (ancienStatut === 'SORTI' && nouveauStatut === 'ACTIF') {
+      this.enregistrerDecisionSortie(
+        salarieId,
+        salarie.nomComplet,
+        'MAINTENU_ACTIF',
+        options.motif || 'Réactivation manuelle du salarié'
+      );
+    } else if (nouveauStatut === 'SORTI') {
+      this.enregistrerDecisionSortie(
+        salarieId,
+        salarie.nomComplet,
+        'SORTIE_CONFIRMEE',
+        options.motif || 'Sortie manuelle du salarié'
+      );
+    }
+
+    const auditEvent: EvenementAudit = {
+      id: `audit_statut_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      date: new Date().toISOString(),
+      action: ancienStatut === 'SORTI' && nouveauStatut === 'ACTIF' ? 'ARBITRAGE_REACTIVATION_SORTI' : 'MODIFICATION_STATUT_SALARIE',
+      salarie: salarie.nomComplet,
+      ancienneValeur: ancienStatut,
+      nouvelleValeur: nouveauStatut,
+      periodeConcernee: options.monthId || '2026-09',
+      utilisateur: options.utilisateur || 'Gestionnaire MULT.S',
+      justification: options.motif || `Modification manuelle du statut : ${ancienStatut} ➔ ${nouveauStatut}`,
+    };
+
+    this.enregistrerEvenementAudit(auditEvent);
+    return { salarie, auditEvent };
   },
 
   creerNouveauSalarieReferentiel(donnees: {

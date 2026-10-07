@@ -17,14 +17,20 @@ import {
   X,
   Sparkles,
   Info,
+  Edit3,
 } from 'lucide-react';
 import {
   LigneRegistreCnss,
   BilanRegistreMensuel,
   EvenementAudit,
+  SituationEmploye,
 } from '../types/cnss';
 import { cnssRegisterService } from '../services/cnssRegisterService';
 import { DetailLigneRegistreModal } from './DetailLigneRegistreModal';
+import {
+  ModifierStatutSalarieModal,
+  SalariePourModificationStatut,
+} from './ModifierStatutSalarieModal';
 
 interface RegistreCnssViewProps {
   lignesRegistre: LigneRegistreCnss[];
@@ -36,6 +42,11 @@ interface RegistreCnssViewProps {
   onDemanderReouverture: (ligneId: string, motif: string) => void;
   onValiderToutLeRegistre: () => void;
   onNaviguerVersRapprochement: () => void;
+  onModifierStatutSalarie?: (
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    motif: string
+  ) => Promise<void>;
 }
 
 export type FiltreRegistreType =
@@ -60,12 +71,14 @@ export const RegistreCnssView: React.FC<RegistreCnssViewProps> = ({
   onDemanderReouverture,
   onValiderToutLeRegistre,
   onNaviguerVersRapprochement,
+  onModifierStatutSalarie,
 }) => {
   const [recherche, setRecherche] = useState('');
   const [filtreActif, setFiltreActif] = useState<FiltreRegistreType>('TOUS');
   const [ligneSelectionnee, setLigneSelectionnee] = useState<LigneRegistreCnss | null>(null);
   const [isValidationGlobaleModalOpen, setIsValidationGlobaleModalOpen] = useState(false);
   const [isExportNoticeOpen, setIsExportNoticeOpen] = useState(false);
+  const [salariePourStatutModal, setSalariePourStatutModal] = useState<SalariePourModificationStatut | null>(null);
 
   // Bilan en temps réel
   const bilan = useMemo<BilanRegistreMensuel>(() => {
@@ -458,17 +471,40 @@ export const RegistreCnssView: React.FC<RegistreCnssViewProps> = ({
 
                     {/* Situation */}
                     <td className="py-3 px-3 text-center">
-                      <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          ligne.situation === 'ACTIF'
-                            ? 'bg-slate-100 text-slate-700'
-                            : ligne.situation === 'SORTI'
-                            ? 'bg-rose-50 text-rose-700'
-                            : 'bg-emerald-50 text-emerald-700'
-                        }`}
-                      >
-                        {ligne.situation}
-                      </span>
+                      <div className="inline-flex flex-col items-center gap-1">
+                        <span
+                          className={`text-[10px] font-black px-2 py-0.5 rounded-full border ${
+                            ligne.situation === 'ACTIF'
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                              : ligne.situation === 'SORTI'
+                              ? 'bg-slate-200 text-slate-800 border-slate-300'
+                              : 'bg-amber-100 text-amber-900 border-amber-300'
+                          }`}
+                        >
+                          {ligne.situation}
+                        </span>
+                        {onModifierStatutSalarie && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSalariePourStatutModal({
+                                id: ligne.salarieId || ligne.id,
+                                nomComplet: ligne.nomOfficiel,
+                                cni: ligne.cni,
+                                immatriculationCnss: ligne.cnss,
+                                situation: ligne.situation as SituationEmploye,
+                                joursMois: ligne.joursDeclares,
+                              });
+                            }}
+                            className="text-[10px] text-teal-700 hover:text-teal-900 font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                            title="Modifier le statut du salarié"
+                          >
+                            <Edit3 className="w-2.5 h-2.5" />
+                            Modifier
+                          </button>
+                        )}
+                      </div>
                     </td>
 
                     {/* Statut Registre */}
@@ -597,6 +633,19 @@ export const RegistreCnssView: React.FC<RegistreCnssViewProps> = ({
           </p>
         </div>
       )}
+
+      {/* MODALE DE MODIFICATION DU STATUT SALARIÉ (PROMPT 17) */}
+      <ModifierStatutSalarieModal
+        isOpen={Boolean(salariePourStatutModal)}
+        onClose={() => setSalariePourStatutModal(null)}
+        salarie={salariePourStatutModal}
+        periodeId={moisActif}
+        onConfirmer={async (id, statut, motif) => {
+          if (onModifierStatutSalarie) {
+            await onModifierStatutSalarie(id, statut, motif);
+          }
+        }}
+      />
     </div>
   );
 };

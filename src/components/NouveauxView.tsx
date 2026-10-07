@@ -14,8 +14,13 @@ import {
 import {
   ResultatRapprochement,
   SalarieReferentiel,
+  SituationEmploye,
 } from '../types/cnss';
 import { persistenceService } from '../services/persistenceService';
+import {
+  ModifierStatutSalarieModal,
+  SalariePourModificationStatut,
+} from './ModifierStatutSalarieModal';
 
 interface NouveauxViewProps {
   rapprochements: ResultatRapprochement[];
@@ -30,6 +35,11 @@ interface NouveauxViewProps {
     cnss?: string
   ) => void;
   onNaviguerVersRapprochement: () => void;
+  onModifierStatutSalarie?: (
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    motif: string
+  ) => Promise<void>;
 }
 
 export const NouveauxView: React.FC<NouveauxViewProps> = ({
@@ -38,8 +48,10 @@ export const NouveauxView: React.FC<NouveauxViewProps> = ({
   onAjouterNouveauALaBase,
   onCompleterIdentifiantNouveau,
   onNaviguerVersRapprochement,
+  onModifierStatutSalarie,
 }) => {
   const [recherche, setRecherche] = useState('');
+  const [salariePourStatutModal, setSalariePourStatutModal] = useState<SalariePourModificationStatut | null>(null);
   const [modalEdition, setModalEdition] = useState<{
     rap: ResultatRapprochement;
     nom: string;
@@ -131,7 +143,8 @@ export const NouveauxView: React.FC<NouveauxViewProps> = ({
                 <th className="py-3 px-3 font-mono">CNI</th>
                 <th className="py-3 px-3 font-mono">N° CNSS</th>
                 <th className="py-3 px-3 text-center">Score</th>
-                <th className="py-3 px-3">Statut</th>
+                <th className="py-3 px-3">Statut Workflow</th>
+                <th className="py-3 px-3 text-center">Statut Salarié</th>
                 <th className="py-3 px-3">Date Première Apparition</th>
                 <th className="py-3 px-3 text-right">Actions</th>
               </tr>
@@ -139,7 +152,7 @@ export const NouveauxView: React.FC<NouveauxViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {lignesFiltrees.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     <UserPlus className="w-8 h-8 mx-auto mb-2 text-slate-300" />
                     Aucun nouvel entrant détecté selon les critères.
                   </td>
@@ -206,6 +219,46 @@ export const NouveauxView: React.FC<NouveauxViewProps> = ({
                             🟠 NON IDENTIFIÉ (À VÉRIFIER)
                           </span>
                         )}
+                      </td>
+
+                      {/* Statut Salarié avec action Modifier (PROMPT 17) */}
+                      <td className="py-3.5 px-3 text-center">
+                        {(() => {
+                          const sal = rap.salariePropose || baseSalaries.find(s => s.id === rap.salarieBaseId);
+                          const sit = sal?.situation || (estConfirme ? 'ACTIF' : 'A_VERIFIER');
+                          return (
+                            <div className="inline-flex flex-col items-center gap-1">
+                              <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                                sit === 'ACTIF'
+                                  ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                                  : sit === 'SORTI'
+                                  ? 'bg-slate-200 text-slate-800 border-slate-300'
+                                  : 'bg-amber-100 text-amber-900 border-amber-300'
+                              }`}>
+                                {sit}
+                              </span>
+                              {onModifierStatutSalarie && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSalariePourStatutModal({
+                                      id: sal?.id || rap.salarieBaseId || rap.id,
+                                      nomComplet: sal?.nomComplet || rap.nomDeclareFinal || rap.lignePaieId,
+                                      cni: sal?.cni || rap.cniDeclareeFinale,
+                                      immatriculationCnss: sal?.immatriculationCnss || rap.cnssDeclareeFinale,
+                                      situation: sit,
+                                      joursMois: rap.validationJours.joursDeclares ?? rap.validationJours.joursImportes,
+                                    });
+                                  }}
+                                  className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                                  title="Modifier manuellement le statut de ce salarié"
+                                >
+                                  Modifier
+                                </button>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </td>
 
                       {/* Date première apparition */}
@@ -320,6 +373,18 @@ export const NouveauxView: React.FC<NouveauxViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* MODALE DE MODIFICATION DU STATUT SALARIÉ (PROMPT 17) */}
+      <ModifierStatutSalarieModal
+        isOpen={Boolean(salariePourStatutModal)}
+        onClose={() => setSalariePourStatutModal(null)}
+        salarie={salariePourStatutModal}
+        onConfirmer={async (id, statut, motif) => {
+          if (onModifierStatutSalarie) {
+            await onModifierStatutSalarie(id, statut, motif);
+          }
+        }}
+      />
     </div>
   );
 };

@@ -5,6 +5,10 @@
 export type SituationEmploye =
   | 'ACTIF'
   | 'SORTI'
+  | 'A_VERIFIER'
+  | 'À_VÉRIFIER'
+  | 'NOUVEAU'
+  | 'INACTIF'
   | 'ACCIDENT_TRAVAIL'
   | 'SUSPENDU';
 

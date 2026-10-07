@@ -10,12 +10,18 @@ import {
   Info,
   ShieldAlert,
   Building,
+  Edit3,
 } from 'lucide-react';
 import {
   SortieItem,
   ResultatRapprochement,
   SalarieReferentiel,
+  SituationEmploye,
 } from '../types/cnss';
+import {
+  ModifierStatutSalarieModal,
+  SalariePourModificationStatut,
+} from './ModifierStatutSalarieModal';
 
 interface SortiesViewProps {
   sorties: SortieItem[];
@@ -27,6 +33,11 @@ interface SortiesViewProps {
     idRapprochement: string,
     action: 'REACTIVATION_CONFIRMEE' | 'CONSERVE_SORTI'
   ) => void;
+  onModifierStatutSalarie?: (
+    salarieId: string,
+    nouveauStatut: SituationEmploye,
+    motif: string
+  ) => Promise<void>;
 }
 
 export const SortiesView: React.FC<SortiesViewProps> = ({
@@ -36,9 +47,11 @@ export const SortiesView: React.FC<SortiesViewProps> = ({
   onMaintenirActif,
   onRechercherCorrespondanceAlternative,
   onArbitrerReactivationSorti,
+  onModifierStatutSalarie,
 }) => {
   const [recherche, setRecherche] = useState('');
   const [filtreStatut, setFiltreStatut] = useState<'TOUTES' | 'A_CONFIRMER' | 'CONFIRMEES' | 'MAINTENUES'>('TOUTES');
+  const [salariePourStatutModal, setSalariePourStatutModal] = useState<SalariePourModificationStatut | null>(null);
 
   // Identifier les cas de salariés notés 'SORTI' en base mais ayant des jours en paie (Section 13 - Marouane Moukrim)
   const sortisRetravaillant = rapprochements.filter(
@@ -155,6 +168,26 @@ export const SortiesView: React.FC<SortiesViewProps> = ({
 
                 <div className="flex items-center gap-2">
                   <span className="text-[11px] font-bold text-slate-600">Décision :</span>
+                  {onModifierStatutSalarie && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSalariePourStatutModal({
+                          id: rap.salariePropose?.id || rap.salarieBaseId || rap.id,
+                          nomComplet: rap.salariePropose?.nomComplet || rap.nomDeclareFinal || '',
+                          cni: rap.salariePropose?.cni || rap.cniDeclareeFinale,
+                          immatriculationCnss: rap.salariePropose?.immatriculationCnss || rap.cnssDeclareeFinale,
+                          situation: rap.salariePropose?.situation || 'SORTI',
+                          joursMois: rap.validationJours.joursDeclares ?? rap.validationJours.joursImportes,
+                        });
+                      }}
+                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-xs font-bold cursor-pointer transition-all flex items-center gap-1 shadow-2xs"
+                      title="Modifier manuellement le statut de ce salarié sorti"
+                    >
+                      <Edit3 className="w-3 h-3" />
+                      Modifier Statut
+                    </button>
+                  )}
                   <button
                     onClick={() => onArbitrerReactivationSorti(rap.id, 'REACTIVATION_CONFIRMEE')}
                     className={`px-3 py-1 rounded text-xs font-bold cursor-pointer transition-all ${
@@ -194,6 +227,7 @@ export const SortiesView: React.FC<SortiesViewProps> = ({
                 <th className="py-3 px-3">Situation Précédente</th>
                 <th className="py-3 px-3 text-center">Derniers Jours</th>
                 <th className="py-3 px-3">Motif Constaté</th>
+                <th className="py-3 px-3 text-center">Statut Salarié</th>
                 <th className="py-3 px-3">Statut Sortie</th>
                 <th className="py-3 px-3 text-right">Action</th>
               </tr>
@@ -201,7 +235,7 @@ export const SortiesView: React.FC<SortiesViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {sortiesFiltrees.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     <CheckCircle2 className="w-8 h-8 mx-auto mb-2 text-emerald-500" />
                     Aucun salarié sorti à signaler selon vos critères.
                   </td>
@@ -253,6 +287,41 @@ export const SortiesView: React.FC<SortiesViewProps> = ({
                       {/* Motif constaté */}
                       <td className="py-3.5 px-3 text-slate-600">
                         {s.motif}
+                      </td>
+
+                      {/* Statut Salarié avec action Modifier (PROMPT 17) */}
+                      <td className="py-3.5 px-3 text-center">
+                        <div className="inline-flex flex-col items-center gap-1">
+                          <span className={`px-2 py-0.5 rounded text-[10px] font-black uppercase border ${
+                            (s.salarie.situation || 'SORTI') === 'ACTIF'
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                              : (s.salarie.situation || 'SORTI') === 'SORTI'
+                              ? 'bg-slate-200 text-slate-800 border-slate-300'
+                              : 'bg-amber-100 text-amber-900 border-amber-300'
+                          }`}>
+                            {s.salarie.situation || 'SORTI'}
+                          </span>
+                          {onModifierStatutSalarie && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSalariePourStatutModal({
+                                  id: s.salarie.id,
+                                  nomComplet: s.salarie.nomComplet,
+                                  cni: s.salarie.cni,
+                                  immatriculationCnss: s.salarie.immatriculationCnss,
+                                  situation: s.salarie.situation || 'SORTI',
+                                  joursMois: s.derniersJours,
+                                });
+                              }}
+                              className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold hover:underline cursor-pointer flex items-center gap-0.5"
+                              title="Modifier manuellement le statut de ce salarié"
+                            >
+                              <Edit3 className="w-2.5 h-2.5" />
+                              Modifier
+                            </button>
+                          )}
+                        </div>
                       </td>
 
                       {/* Statut sortie */}
@@ -308,6 +377,18 @@ export const SortiesView: React.FC<SortiesViewProps> = ({
           </table>
         </div>
       </div>
+
+      {/* MODALE DE MODIFICATION DU STATUT SALARIÉ (PROMPT 17) */}
+      <ModifierStatutSalarieModal
+        isOpen={Boolean(salariePourStatutModal)}
+        onClose={() => setSalariePourStatutModal(null)}
+        salarie={salariePourStatutModal}
+        onConfirmer={async (id, statut, motif) => {
+          if (onModifierStatutSalarie) {
+            await onModifierStatutSalarie(id, statut, motif);
+          }
+        }}
+      />
     </div>
   );
 };
