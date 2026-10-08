@@ -40,6 +40,7 @@ import { DocumentBordereauCnss, EntrepriseCnssConfig } from '../types/cnssBorder
 import { DocumentBordereauPaiementCnss } from '../types/cnssPaiement';
 import { cnssDossierService } from '../services/cnssDossierService';
 import { persistenceService } from '../services/persistenceService';
+import { supabasePersistenceService } from '../services/supabasePersistenceService';
 import { ApercuDossierSynthese } from './ApercuDossierSynthese';
 
 interface ControleFinalCnssViewProps {
@@ -123,7 +124,7 @@ export const ControleFinalCnssView: React.FC<ControleFinalCnssViewProps> = ({
   };
 
   // Recalcul de l'agrégation
-  const handleRecalculerDossier = () => {
+  const handleRecalculerDossier = async () => {
     const decActuelle = persistenceService.getBordereauPeriode(moisActif);
     const payActuelle = persistenceService.getPaiementPeriode(moisActif);
     const maj = cnssDossierService.agregerDossierMensuel({
@@ -138,7 +139,13 @@ export const ControleFinalCnssView: React.FC<ControleFinalCnssViewProps> = ({
     });
     setDossier(maj);
     persistenceService.saveDossierPeriode(moisActif, maj);
-    afficherNotification('Dossier CNSS synchronisé avec les données sources.');
+    await supabasePersistenceService.saveDossierPeriode(moisActif, maj);
+    if (decActuelle) await supabasePersistenceService.saveBordereauPeriode(moisActif, decActuelle);
+    if (payActuelle) await supabasePersistenceService.savePaiementPeriode(moisActif, payActuelle);
+    if (lignesRegistre && lignesRegistre.length > 0) {
+      await supabasePersistenceService.saveRegistrePeriode(moisActif, lignesRegistre);
+    }
+    afficherNotification('✓ Dossier CNSS synchronisé avec le registre, bordereaux et Supabase.');
   };
 
   // Validation formelle

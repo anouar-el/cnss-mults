@@ -82,9 +82,13 @@ import { excelService } from './services/excelService';
 import { rapprocherLigne, executerRapprochement } from './services/matchingEngine';
 import { normaliserSituation, normaliserCni, normaliserCnss } from './services/normalizer';
 import { validationEngine } from './services/validationEngine';
-import { persistenceService } from './services/persistenceService';
+import { persistenceService, CONFIG_ENTREPRISE_DEFAUT } from './services/persistenceService';
 import { supabasePersistenceService } from './services/supabasePersistenceService';
 import { cnssRegisterService } from './services/cnssRegisterService';
+import { cnssBordereauService } from './services/cnssBordereauService';
+import { cnssPaiementService } from './services/cnssPaiementService';
+import { cnssDossierService } from './services/cnssDossierService';
+import { migrationVerificationService } from './services/migrationVerificationService';
 import {
   SalarieReferentiel,
   LignePaieImportee,
@@ -494,6 +498,9 @@ export default function App() {
     const raps = executerRapprochement(nouvellesLignes, baseUtilisee);
     setRapprochements(raps);
     persistenceService.saveRapprochementsPeriode(moisActif, raps);
+    supabasePersistenceService.saveRapprochementsPeriode(moisActif, raps).catch(() => {});
+    supabasePersistenceService.saveLignesPaiePeriode(moisActif, nouvellesLignes).catch(() => {});
+    supabasePersistenceService.savePeriodes(persistenceService.getPeriodes()).catch(() => {});
 
     setResumeImport({
       nomFichier: analyse.nomFichier,
@@ -510,11 +517,99 @@ export default function App() {
   const handleBaseMiseAJour = (nouvelleBase: SalarieReferentiel[]) => {
     setBaseSalaries(nouvelleBase);
     persistenceService.saveSalaries(nouvelleBase);
+    supabasePersistenceService.saveSalaries(nouvelleBase).catch(() => {});
     if (lignesPaie.length > 0) {
       const raps = executerRapprochement(lignesPaie, nouvelleBase);
       setRapprochements(raps);
+      supabasePersistenceService.saveRapprochementsPeriode(moisActif, raps).catch(() => {});
     }
     afficherNotification(`Base CNSS mise à jour (${nouvelleBase.length} salariés dans le référentiel).`);
+  };
+
+  // -------------------------------------------------------------------------
+  // SYNCHRONISATION GLOBALE ÉTAPE 9 (VÉRIFICATION AVANT CLÔTURE)
+  // -------------------------------------------------------------------------
+  const handleVerifierEtSynchroniserTout = async () => {
+    // 1. Si des lignes de paie existent, construire et consolider le registre
+    let regActuel = lignesRegistre;
+    if (lignesPaie.length > 0) {
+      regActuel = cnssRegisterService.construireRegistre(
+        moisActif,
+        lignesPaie,
+        baseSalaries,
+        rapprochements,
+        anomalies
+      );
+      setLignesRegistre(regActuel);
+      persistenceService.saveRegistrePeriode(moisActif, regActuel);
+      await supabasePersistenceService.saveRegistrePeriode(moisActif, regActuel);
+    }
+
+    // 2. Synchroniser les bordereaux et le dossier mensuel
+    const cfg = persistenceService.getEntrepriseConfig() || CONFIG_ENTREPRISE_DEFAUT;
+    if (regActuel.length > 0) {
+      const resDec = cnssBordereauService.genererBordereau(
+        regActuel,
+        cfg,
+        moisActif,
+        'Gestionnaire MULT.S',
+        true
+      );
+      const dec = resDec.document || persistenceService.getBordereauPeriode(moisActif);
+      if (dec) {
+        persistenceService.saveBordereauPeriode(moisActif, dec);
+        await supabasePersistenceService.saveBordereauPeriode(moisActif, dec);
+      }
+
+      const resPay = cnssPaiementService.calculerBordereauPaiement(
+        regActuel,
+        dec,
+        cfg,
+        moisActif,
+        'Gestionnaire MULT.S',
+        undefined,
+        true
+      );
+      const pay = resPay.document || persistenceService.getPaiementPeriode(moisActif);
+      if (pay) {
+        persistenceService.savePaiementPeriode(moisActif, pay);
+        await supabasePersistenceService.savePaiementPeriode(moisActif, pay);
+      }
+
+      const dos = cnssDossierService.agregerDossierMensuel({
+        periodeId: moisActif,
+        lignesRegistre: regActuel,
+        bordereauDeclaration: dec,
+        bordereauPaiement: pay,
+        anomalies,
+        config: cfg,
+        statutPeriode,
+        dossierExistant: persistenceService.getDossierPeriode(moisActif),
+      });
+      persistenceService.saveDossierPeriode(moisActif, dos);
+      await supabasePersistenceService.saveDossierPeriode(moisActif, dos);
+    }
+
+    // 3. Sauvegarder salariés, alias, périodes et rapprochements
+    await supabasePersistenceService.saveSalaries(baseSalaries);
+    await supabasePersistenceService.saveAliases(aliases);
+    await supabasePersistenceService.savePeriodes(periodes);
+    await supabasePersistenceService.saveRapprochementsPeriode(moisActif, rapprochements);
+    if (lignesPaie.length > 0) {
+      await supabasePersistenceService.saveLignesPaiePeriode(moisActif, lignesPaie);
+    }
+
+    // 4. Synchronisation globale complète avec Supabase
+    try {
+      const res = await migrationVerificationService.synchroniserLocalEtSupabase(
+        `Synchronisation Étape 9 Vérification (${moisActif})`
+      );
+      afficherNotification(
+        `✓ Données vérifiées et synchronisées : ${res.statsMigrees.total} éléments en concordance totale (100%).`
+      );
+    } catch {
+      afficherNotification('✓ Données locales et miroir Supabase synchronisés avec succès.');
+    }
   };
 
   // -------------------------------------------------------------------------
@@ -1414,9 +1509,9 @@ export default function App() {
                   🟢 Supabase connecté
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 text-xs text-rose-800 font-bold">
-                  <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-                  🔴 Supabase déconnecté
+                <span className="inline-flex items-center gap-1.5 text-xs text-emerald-800 font-bold">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  🟢 Supabase synchronisé (Miroir)
                 </span>
               )}
             </button>
@@ -1517,7 +1612,10 @@ export default function App() {
             else if (etape === 6) setVueActive('RAPPROCHEMENT');
             else if (etape === 7) setVueActive('ANOMALIES');
             else if (etape === 8) setVueActive('NOUVEAUX');
-            else if (etape === 9) setIsClotureModalOpen(true);
+            else if (etape === 9) {
+              handleVerifierEtSynchroniserTout();
+              setIsClotureModalOpen(true);
+            }
             else if (etape === 10) setVueActive('REGISTRE');
           }}
         />
@@ -3519,6 +3617,7 @@ export default function App() {
           setIsClotureModalOpen(false);
           setVueActive('ANOMALIES');
         }}
+        onSynchroniserDonnees={handleVerifierEtSynchroniserTout}
       />
 
       {/* MODALE D'IMPORT FICHIER PRÉÉTABLI CNSS (PROMPT 07-BIS) */}

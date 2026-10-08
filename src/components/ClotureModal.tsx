@@ -9,6 +9,7 @@ import {
   FileCheck2,
   ShieldAlert,
   ArrowRight,
+  RefreshCw,
 } from 'lucide-react';
 import {
   BilanControlePret,
@@ -30,6 +31,7 @@ interface ClotureModalProps {
   onCloturerMois: (justification: string) => void;
   onReouvrirMois: (justification: string) => void;
   onNaviguerVersAnomalies: () => void;
+  onSynchroniserDonnees?: () => Promise<void> | void;
 }
 
 export const ClotureModal: React.FC<ClotureModalProps> = ({
@@ -44,13 +46,25 @@ export const ClotureModal: React.FC<ClotureModalProps> = ({
   onCloturerMois,
   onReouvrirMois,
   onNaviguerVersAnomalies,
+  onSynchroniserDonnees,
 }) => {
   const [justification, setJustification] = useState('');
   const [modeReouverture, setModeReouverture] = useState(false);
+  const [enSynchronisation, setEnSynchronisation] = useState(false);
 
   if (!isOpen) return null;
 
   const estCloture = statutPeriode === 'CLOTURE';
+
+  const handleSynchro = async () => {
+    if (!onSynchroniserDonnees) return;
+    setEnSynchronisation(true);
+    try {
+      await onSynchroniserDonnees();
+    } finally {
+      setEnSynchronisation(false);
+    }
+  };
 
   // Statistiques de synthèse
   const salariesDeclares = rapprochements.filter(r => (r.validationJours.joursDeclares ?? r.validationJours.joursImportes) > 0).length;
@@ -76,9 +90,23 @@ export const ClotureModal: React.FC<ClotureModalProps> = ({
               Contrôle Global & Clôture Mensuelle ({moisActif})
             </h3>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            {onSynchroniserDonnees && (
+              <button
+                type="button"
+                onClick={handleSynchro}
+                disabled={enSynchronisation}
+                className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-colors cursor-pointer border border-slate-300 disabled:opacity-50 shadow-2xs"
+                title="Vérifier et synchroniser immédiatement toutes les données de la période"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 text-slate-600 ${enSynchronisation ? 'animate-spin' : ''}`} />
+                <span>{enSynchronisation ? 'Synchronisation...' : 'Vérifier & Synchroniser'}</span>
+              </button>
+            )}
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg cursor-pointer">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* 1. VERDICT D'ÉLIGIBILITÉ (Section 18) */}

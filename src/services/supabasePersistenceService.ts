@@ -24,6 +24,7 @@ import { DossierCnssMensuel } from '../types/cnssDossier';
 import { FichierPreetabliCnss } from '../types/cnssPreetabli';
 import { chargerBaseSalariesReelle } from '../data/septembreRealData';
 import { supabase, isSupabaseConfigured } from './supabaseClient';
+import { persistenceService } from './persistenceService';
 
 export interface SupabaseEntitiesStats {
   companies: number;
@@ -40,6 +41,8 @@ export interface SupabaseEntitiesStats {
   preetablis: number;
   totalElements: number;
 }
+
+const SUPABASE_MIRROR_STORAGE_KEY = 'cnss_mults_supabase_mirror_v2';
 
 /**
  * Entrepôt relationnel Supabase (isolé par company_id: '6541835').
@@ -70,6 +73,161 @@ class SupabasePersistenceService {
     preetablis: new Map<string, FichierPreetabliCnss>(),
     anomalies_resolues: new Map<string, Record<string, { justification: string; date: string }>>(),
   };
+
+  constructor() {
+    this.restaurerMiroir();
+  }
+
+  /**
+   * Sauvegarde l'intégralité du miroir transactionnel dans le stockage local persistant.
+   */
+  public sauvegarderMiroir(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const data = {
+        companies: Array.from(this.tables.companies.entries()),
+        employees: Array.from(this.tables.employees.entries()),
+        employee_aliases: Array.from(this.tables.employee_aliases.entries()),
+        periods: Array.from(this.tables.periods.entries()),
+        payroll_lines: Array.from(this.tables.payroll_lines.entries()),
+        reconciliations: Array.from(this.tables.reconciliations.entries()),
+        cnss_register_lines: Array.from(this.tables.cnss_register_lines.entries()),
+        bordereaux: Array.from(this.tables.bordereaux.entries()),
+        payments: Array.from(this.tables.payments.entries()),
+        monthly_dossiers: Array.from(this.tables.monthly_dossiers.entries()),
+        audit_logs: Array.from(this.tables.audit_logs.entries()),
+        preetablis: Array.from(this.tables.preetablis.entries()),
+        anomalies_resolues: Array.from(this.tables.anomalies_resolues.entries()),
+      };
+      localStorage.setItem(SUPABASE_MIRROR_STORAGE_KEY, JSON.stringify(data));
+    } catch (err) {
+      console.warn('Erreur lors de la sauvegarde du miroir Supabase:', err);
+    }
+  }
+
+  /**
+   * Restaure le miroir transactionnel depuis le stockage persistant ou initialise si absent.
+   */
+  private restaurerMiroir(): void {
+    try {
+      if (typeof localStorage === 'undefined') return;
+      const raw = localStorage.getItem(SUPABASE_MIRROR_STORAGE_KEY);
+      if (!raw) {
+        this.initialiserDepuisStockageLocal();
+        return;
+      }
+      const data = JSON.parse(raw);
+      if (data.companies) this.tables.companies = new Map(data.companies);
+      if (data.employees) this.tables.employees = new Map(data.employees);
+      if (data.employee_aliases) this.tables.employee_aliases = new Map(data.employee_aliases);
+      if (data.periods) this.tables.periods = new Map(data.periods);
+      if (data.payroll_lines) this.tables.payroll_lines = new Map(data.payroll_lines);
+      if (data.reconciliations) this.tables.reconciliations = new Map(data.reconciliations);
+      if (data.cnss_register_lines) this.tables.cnss_register_lines = new Map(data.cnss_register_lines);
+      if (data.bordereaux) this.tables.bordereaux = new Map(data.bordereaux);
+      if (data.payments) this.tables.payments = new Map(data.payments);
+      if (data.monthly_dossiers) this.tables.monthly_dossiers = new Map(data.monthly_dossiers);
+      if (data.audit_logs) this.tables.audit_logs = new Map(data.audit_logs);
+      if (data.preetablis) this.tables.preetablis = new Map(data.preetablis);
+      if (data.anomalies_resolues) this.tables.anomalies_resolues = new Map(data.anomalies_resolues);
+
+      if (this.tables.employees.size === 0 && this.tables.periods.size === 0) {
+        this.initialiserDepuisStockageLocal();
+      }
+    } catch {
+      this.initialiserDepuisStockageLocal();
+    }
+  }
+
+  /**
+   * Initialise le miroir avec toutes les données actuellement disponibles localement.
+   */
+  public initialiserDepuisStockageLocal(): void {
+    try {
+      // 1. Entreprise
+      const cfg = persistenceService.getEntrepriseConfig();
+      if (cfg) this.tables.companies.set(cfg.numeroAffiliation || this.companyId, { ...cfg });
+
+      // 2. Salariés
+      const sal = persistenceService.getSalaries();
+      if (sal && sal.length > 0) {
+        sal.forEach(s => this.tables.employees.set(s.id, { ...s }));
+      } else {
+        const init = chargerBaseSalariesReelle();
+        init.forEach(s => this.tables.employees.set(s.id, { ...s }));
+      }
+
+      // 3. Alias
+      const al = persistenceService.getAliases();
+      if (al && al.length > 0) {
+        al.forEach(a => {
+          const cle = `${a.salarieId}_${(a.aliasNormalise || a.aliasBrut).toLowerCase().trim()}`;
+          this.tables.employee_aliases.set(cle, { ...a });
+        });
+      }
+
+      // 4. Périodes
+      const pers = persistenceService.getPeriodes();
+      if (pers && pers.length > 0) {
+        pers.forEach(p => this.tables.periods.set(p.idMois || p.id || '2026-09', { ...p }));
+      }
+
+      // 5. Éléments par période
+      const periodesAInspecter = pers && pers.length > 0 ? pers : [{ idMois: '2026-09' }];
+      for (const p of periodesAInspecter) {
+        const pId = p.idMois || (p as any).id || '2026-09';
+        const pl = persistenceService.getLignesPaiePeriode(pId);
+        if (pl && pl.length > 0) this.tables.payroll_lines.set(pId, [...pl]);
+        const raps = persistenceService.getRapprochementsPeriode(pId);
+        if (raps && raps.length > 0) this.tables.reconciliations.set(pId, [...raps]);
+        const reg = persistenceService.getRegistrePeriode(pId);
+        if (reg && reg.length > 0) this.tables.cnss_register_lines.set(pId, [...reg]);
+        const bor = persistenceService.getBordereauPeriode(pId);
+        if (bor) this.tables.bordereaux.set(pId, { ...bor });
+        const pay = persistenceService.getPaiementPeriode(pId);
+        if (pay) this.tables.payments.set(pId, { ...pay });
+        const dos = persistenceService.getDossierPeriode(pId);
+        if (dos) this.tables.monthly_dossiers.set(pId, { ...dos });
+        const pre = persistenceService.getFichierPreetabli(pId);
+        if (pre) this.tables.preetablis.set(pId, { ...pre });
+        const anom = persistenceService.getAnomaliesResoluesManuellement(pId);
+        if (anom) this.tables.anomalies_resolues.set(pId, { ...anom });
+      }
+
+      // 6. Audits
+      const audits = persistenceService.getJournalAudit();
+      if (audits && audits.length > 0) {
+        audits.forEach(a => this.tables.audit_logs.set(a.id, { ...a }));
+      }
+
+      this.sauvegarderMiroir();
+    } catch (err) {
+      console.warn('Erreur initialisation miroir depuis stockage local:', err);
+    }
+  }
+
+  /**
+   * Synchronisation explicite complète de l'ensemble du stockage local avec Supabase / miroir.
+   */
+  public async synchroniserAvecStockageLocal(): Promise<{ totalElements: number }> {
+    this.initialiserDepuisStockageLocal();
+    if (isSupabaseConfigured()) {
+      try {
+        const cfg = await this.getCompanyConfig();
+        if (cfg) await this.saveCompanyConfig(cfg);
+        const sal = await this.getSalaries();
+        if (sal) await this.saveSalaries(sal);
+        const aliases = await this.getAliases();
+        if (aliases) await this.saveAliases(aliases);
+        const pers = await this.getPeriodes();
+        if (pers) await this.savePeriodes(pers);
+      } catch {
+        // Mode résilient
+      }
+    }
+    const stats = await this.getStats();
+    return { totalElements: stats.totalElements };
+  }
 
   public getCompanyAffiliation(): string {
     return this.companyId;
@@ -108,6 +266,7 @@ class SupabasePersistenceService {
 
   async saveCompanyConfig(config: EntrepriseCnssConfig): Promise<void> {
     this.tables.companies.set(config.numeroAffiliation || this.companyId, { ...config });
+    this.sauvegarderMiroir();
 
     if (isSupabaseConfigured()) {
       try {
@@ -307,6 +466,7 @@ class SupabasePersistenceService {
 
     // Mise à jour de la table en mémoire
     this.tables.employees.set(salarieId, salarieMisAJour);
+    this.sauvegarderMiroir();
 
     // Mettre à jour la situation dans les rapprochements de la période si présents
     const monthId = options.monthId || '2026-09';
@@ -374,6 +534,7 @@ class SupabasePersistenceService {
 
   async saveSalarie(salarie: SalarieReferentiel): Promise<void> {
     this.tables.employees.set(salarie.id, { ...salarie });
+    this.sauvegarderMiroir();
 
     if (this.simulerErreurSupabase) {
       console.warn('[SUPABASE-SYNC] simulation test erreur UPDATE', { table: 'employees', id: salarie.id, cause: 'Simulation erreur' });
@@ -457,6 +618,7 @@ class SupabasePersistenceService {
     // Clé d'idempotence basée sur la variante normalisée et le salarié
     const cleIdempotence = `${alias.salarieId}_${(alias.aliasNormalise || alias.aliasBrut).toLowerCase().trim()}`;
     this.tables.employee_aliases.set(cleIdempotence, { ...alias });
+    this.sauvegarderMiroir();
 
     if (isSupabaseConfigured()) {
       try {
@@ -517,6 +679,7 @@ class SupabasePersistenceService {
   async savePeriode(periode: PeriodeMensuelle): Promise<void> {
     const id = periode.idMois || periode.id || '2026-09';
     this.tables.periods.set(id, { ...periode, idMois: id, id });
+    this.sauvegarderMiroir();
 
     if (isSupabaseConfigured()) {
       try {
@@ -549,6 +712,7 @@ class SupabasePersistenceService {
   async saveLignesPaiePeriode(monthId: string, lines: LignePaieImportee[]): Promise<void> {
     // Clonage profond pour garantir l'immutabilité
     this.tables.payroll_lines.set(monthId, JSON.parse(JSON.stringify(lines)));
+    this.sauvegarderMiroir();
   }
 
   // =========================================================================
@@ -597,6 +761,7 @@ class SupabasePersistenceService {
 
   async saveRegistrePeriode(monthId: string, lines: LigneRegistreCnss[]): Promise<void> {
     this.tables.cnss_register_lines.set(monthId, JSON.parse(JSON.stringify(lines)));
+    this.sauvegarderMiroir();
   }
 
   // =========================================================================
@@ -608,6 +773,7 @@ class SupabasePersistenceService {
 
   async saveDossierPeriode(monthId: string, dossier: DossierCnssMensuel): Promise<void> {
     this.tables.monthly_dossiers.set(monthId, JSON.parse(JSON.stringify(dossier)));
+    this.sauvegarderMiroir();
   }
 
   // =========================================================================
@@ -644,6 +810,7 @@ class SupabasePersistenceService {
 
   async enregistrerEvenementAudit(event: EvenementAudit): Promise<void> {
     this.tables.audit_logs.set(event.id, { ...event });
+    this.sauvegarderMiroir();
 
     if (isSupabaseConfigured()) {
       try {
@@ -800,6 +967,7 @@ class SupabasePersistenceService {
     }
 
     this.tables.reconciliations.set(monthId, JSON.parse(JSON.stringify(lines)));
+    this.sauvegarderMiroir();
   }
 
   async validerSalarieRapprochement(
@@ -935,6 +1103,7 @@ class SupabasePersistenceService {
 
     raps[index] = misAJour;
     this.tables.reconciliations.set(monthId, raps);
+    this.sauvegarderMiroir();
 
     if (options.memoriserAlias && salarieFinal) {
       await this.saveAlias({
@@ -962,6 +1131,7 @@ class SupabasePersistenceService {
 
   async saveBordereauPeriode(monthId: string, doc: DocumentBordereauCnss): Promise<void> {
     this.tables.bordereaux.set(monthId, JSON.parse(JSON.stringify(doc)));
+    this.sauvegarderMiroir();
   }
 
   // =========================================================================
@@ -973,6 +1143,7 @@ class SupabasePersistenceService {
 
   async savePaiementPeriode(monthId: string, doc: DocumentBordereauPaiementCnss): Promise<void> {
     this.tables.payments.set(monthId, JSON.parse(JSON.stringify(doc)));
+    this.sauvegarderMiroir();
   }
 
   // =========================================================================
@@ -984,6 +1155,7 @@ class SupabasePersistenceService {
 
   async saveFichierPreetabli(monthId: string, doc: FichierPreetabliCnss): Promise<void> {
     this.tables.preetablis.set(monthId, JSON.parse(JSON.stringify(doc)));
+    this.sauvegarderMiroir();
   }
 
   // =========================================================================
@@ -997,10 +1169,12 @@ class SupabasePersistenceService {
     const existant = this.tables.anomalies_resolues.get(monthId) || {};
     existant[anomalieId] = { justification, date: new Date().toISOString() };
     this.tables.anomalies_resolues.set(monthId, existant);
+    this.sauvegarderMiroir();
   }
 
   saveAnomaliesResoluesManuellement(monthId: string, map: Record<string, { justification: string; date: string }>): void {
     this.tables.anomalies_resolues.set(monthId, { ...map });
+    this.sauvegarderMiroir();
   }
 
   // =========================================================================
@@ -1114,6 +1288,7 @@ class SupabasePersistenceService {
       }
     }
 
+    this.sauvegarderMiroir();
     return { baseSalariesCount: this.tables.employees.size };
   }
 
@@ -1134,6 +1309,13 @@ class SupabasePersistenceService {
     this.tables.audit_logs.clear();
     this.tables.preetablis.clear();
     this.tables.anomalies_resolues.clear();
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(SUPABASE_MIRROR_STORAGE_KEY);
+      }
+    } catch {
+      // ignore
+    }
   }
 }
 

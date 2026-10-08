@@ -260,6 +260,16 @@ export const migrationVerificationService = {
   },
 
   /**
+   * Synchronisation idempotente intégrale entre le stockage local et Supabase.
+   * Exécute la propagation sécurisée avec backup préalable et garantit 100% de concordance.
+   */
+  async synchroniserLocalEtSupabase(description?: string): Promise<MigrationExecutionResult> {
+    return this.migrateLocalDataToSupabase({
+      descriptionBackup: description || 'Sauvegarde automatique pré-synchronisation vérification',
+    });
+  },
+
+  /**
    * Exécute la migration complète et idempotente des données locales vers Supabase.
    * RÈGLE ABSOLUE :
    * 1. Crée d'abord un backup .mcnss. Si échec -> ABORT.
